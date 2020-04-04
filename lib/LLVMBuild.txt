@@ -1,0 +1,11 @@
+[component_0]
+type = TargetGroup
+name = CMakeBackend
+parent = Target
+
+[component_1]
+type = Library
+name = CMakeBackendCodeGen
+parent = CMakeBackend
+required_libraries = Analysis CodeGen Core MC ScalarOpts Support Target TransformUtils
+add_to_library_groups = CMakeBackend

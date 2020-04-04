@@ -1,0 +1,35 @@
+---
+AllowShortBlocksOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterControlStatement: true
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: true
+  AfterObjCDeclaration: true
+  AfterStruct: true
+  AfterUnion: true
+  AfterExternBlock: true
+  BeforeCatch: true
+  BeforeElse: true
+  IndentBraces: false
+  SplitEmptyFunction: true
+  SplitEmptyRecord: true
+  SplitEmptyNamespace: true
+Cpp11BracedListStyle: false
+FixNamespaceComments: true
+IndentPPDirectives: AfterHash
+Language: Cpp
+NamespaceIndentation: All
+SpaceAfterCStyleCast: true
+Standard: Cpp11
+UseTab: ForIndentation
+TabWidth: 2
+PointerAlignment: Left
+ColumnLimit: 100
+AlwaysBreakTemplateDeclarations: Yes
+
+...
