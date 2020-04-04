@@ -137,19 +137,25 @@ void CMakeBackend::visitLoadInst(llvm::LoadInst& I)
 
 	const auto destName = getValueName(&I);
 
-	// const auto headName = allocateTemporaryName();
-	// outputIntent();
-	// m_Out << "list(GET ${" << operand << "} 0 " << headName << ")\n";
-	// outputIntent();
-	// m_Out << "if(${" << headName << "} STREQUAL \"_LLVM_CMAKE_GEP_\")\n";
-	// outputIntent();
-	// const auto listName = allocateTemporaryName();
-	// m_Out << "\tlist(GET ${" << operand << "} 1 " << listName << ")\n";
-	// outputIntent();
-	// const auto idxLength = allocateTemporaryName();
-	// m_Out << "\tlist(LENGTH ${" << operand << "} " << idxLength << ")\n";
-
-	m_Out << "set(" << destName << " ${${" << operand << "}})\n";
+	const auto headName = allocateTemporaryName();
+	outputIntent();
+	m_Out << "list(GET ${" << operand << "} 0 " << headName << ")\n";
+	outputIntent();
+	m_Out << "if(${" << headName << "} STREQUAL \"_LLVM_CMAKE_GEP_\")\n";
+	outputIntent();
+	const auto listRef = allocateTemporaryName();
+	m_Out << "\tlist(GET ${" << operand << "} 1 " << listRef << ")\n";
+	outputIntent();
+	const auto idxValue = allocateTemporaryName();
+	m_Out << "\tlist(GET ${" << operand << "} 2 " << idxValue << ")\n";
+	outputIntent();
+	m_Out << "\tlist(GET ${${" << listRef << "}} ${" << idxValue << "} " << destName << ")\n";
+	outputIntent();
+	m_Out << "else()\n";
+	outputIntent();
+	m_Out << "\tset(" << destName << " ${${" << operand << "}})\n";
+	outputIntent();
+	m_Out << "endif()\n";
 }
 
 void CMakeBackend::visitStoreInst(llvm::StoreInst& I)
@@ -160,8 +166,27 @@ void CMakeBackend::visitStoreInst(llvm::StoreInst& I)
 	const auto operandDest = getValueName(I.getOperand(1));
 	evalOperand(I.getOperand(1));
 
+	const auto headName = allocateTemporaryName();
 	outputIntent();
-	m_Out << "set(${" << operandDest << "} ${" << operandValue << "})\n";
+	m_Out << "list(GET ${" << operandDest << "} 0 " << headName << ")\n";
+	outputIntent();
+	m_Out << "if(${" << headName << "} STREQUAL \"_LLVM_CMAKE_GEP_\")\n";
+	outputIntent();
+	const auto listRef = allocateTemporaryName();
+	m_Out << "\tlist(GET ${" << operandDest << "} 1 " << listRef << ")\n";
+	outputIntent();
+	const auto idxValue = allocateTemporaryName();
+	m_Out << "\tlist(GET ${" << operandDest << "} 2 " << idxValue << ")\n";
+	outputIntent();
+	m_Out << "\tlist(REMOVE_AT ${" << listRef << "} ${" << idxValue << "})\n";
+	outputIntent();
+	m_Out << "\tlist(INSERT ${" << listRef << "} ${" << idxValue << "} ${" << operandValue << "})\n";
+	outputIntent();
+	m_Out << "else()\n";
+	outputIntent();
+	m_Out << "\tset(${" << operandDest << "} ${" << operandValue << "})\n";
+	outputIntent();
+	m_Out << "endif()\n";
 }
 
 void CMakeBackend::visitAllocaInst(llvm::AllocaInst& I)
@@ -198,29 +223,97 @@ void CMakeBackend::visitGetElementPtrInst(llvm::GetElementPtrInst& I)
 	}
 
 	const auto ptrOperand = I.getPointerOperand();
+	const auto ptrType = cast<PointerType>(ptrOperand->getType());
 	evalOperand(ptrOperand);
 
 	const auto listName = getValueName(ptrOperand);
-	for (std::size_t i = 1; i < I.getNumOperands() - 1; ++i)
+
+	std::size_t realIdx{};
+	auto pointeeType = ptrType->getElementType();
+	for (std::size_t i = 2; i < I.getNumOperands(); ++i)
 	{
 		const auto idxOperand = I.getOperand(i);
-		evalOperand(idxOperand);
+		// TODO: 支持动态索引
+		if (const auto constIdx = dyn_cast<ConstantInt>(idxOperand))
+		{
+			const auto idxValue = constIdx->getValue().getZExtValue();
+			if (const auto arrayType = dyn_cast<ArrayType>(pointeeType))
+			{
+				const auto fieldSize = getTypeFieldCount(arrayType->getElementType());
+				realIdx += idxValue * fieldSize;
+				pointeeType = arrayType->getElementType();
+			}
+			else if (const auto structType = dyn_cast<StructType>(pointeeType))
+			{
+				for (std::size_t i = 0; i < idxValue; ++i)
+				{
+					const auto fieldType = structType->getElementType(i);
+					realIdx += getTypeFieldCount(fieldType);
+				}
+				pointeeType = structType->getElementType(idxValue);
+			}
+			else
+			{
+				assert(!"Unsupported type");
+				std::terminate();
+			}
+		}
+		else
+		{
+			assert(!"Not implemented");
+			std::terminate();
+		}
 	}
 
 	outputIntent();
-	m_Out << "set(" << getValueName(&I) << " \"_LLVM_CMAKE_GEP_;" << listName;
-
-	for (std::size_t i = 1; i < I.getNumOperands() - 1; ++i)
-	{
-		const auto idxOperandName = getValueName(I.getOperand(i));
-		m_Out << ";${" << idxOperandName << "}";
-	}
-
-	m_Out << "\")\n";
+	m_Out << "set(" << getValueName(&I) << " \"_LLVM_CMAKE_GEP_;" << listName << ";" << realIdx
+	      << "\")\n";
 }
 
 void CMakeBackend::visitBranchInst(BranchInst& I)
 {
+	if (I.isConditional())
+	{
+		const auto cond = I.getCondition();
+		evalOperand(cond);
+		const auto condName = getValueName(cond);
+		outputIntent();
+		m_Out << "if(${" << condName << "})\n";
+		const auto trueBranch = I.getSuccessor(0);
+		const auto falseBranch = I.getSuccessor(1);
+		if (I.getParent()->getNextNode() != trueBranch)
+		{
+			assert(!"Goto not supported in CMake.");
+			std::terminate();
+		}
+
+		// TODO: 处理 else if
+		if (const auto endIfBr = dyn_cast<BranchInst>(falseBranch->getPrevNode()->getTerminator());
+		    endIfBr && endIfBr->getNumSuccessors() == 1)
+		{
+			const auto endIfBlock = endIfBr->getSuccessor(0);
+			++m_CurrentIntent;
+			m_CondElseEndifStack.push_back({ I.getSuccessor(1), endIfBlock });
+		}
+		else
+		{
+			assert(!"Goto not supported in CMake.");
+			std::terminate();
+		}
+	}
+	else
+	{
+		const auto successor = I.getSuccessor(0);
+		const auto next = I.getParent()->getNextNode();
+		if (successor != next)
+		{
+			if (m_CondElseEndifStack.empty() || m_CondElseEndifStack.back().second != successor)
+			{
+				assert(!"Goto not supported in CMake.");
+				std::terminate();
+			}
+		}
+	}
 }
 
 void CMakeBackend::outputIntent()
@@ -326,6 +419,34 @@ llvm::StringRef CMakeBackend::getTypeName(llvm::Type* type)
 	return iter->second;
 }
 
+std::size_t CMakeBackend::getTypeFieldCount(llvm::Type* type)
+{
+	auto iter = m_TypeFieldCountCache.find(type);
+	if (iter == m_TypeFieldCountCache.end())
+	{
+		std::size_t result;
+		if (const auto structType = dyn_cast<StructType>(type))
+		{
+			for (std::size_t i = 0; i < structType->getNumElements(); ++i)
+			{
+				result += getTypeFieldCount(structType->getElementType(i));
+			}
+		}
+		else if (type->isArrayTy())
+		{
+			result = type->getArrayNumElements() * getTypeFieldCount(type->getArrayElementType());
+		}
+		else
+		{
+			result = 1;
+		}
+
+		std::tie(iter, std::ignore) = m_TypeFieldCountCache.emplace(type, result);
+	}
+
+	return iter->second;
+}
+
 void CMakeBackend::outputFunction(Function& f)
 {
 	m_Out << "function(" << f.getName();
@@ -345,6 +466,23 @@ void CMakeBackend::outputFunction(Function& f)
 
 void CMakeBackend::outputBasicBlock(BasicBlock* bb)
 {
+	if (!m_CondElseEndifStack.empty())
+	{
+		if (const auto [elseBlock, endIfBlock] = m_CondElseEndifStack.back();
+		    bb == elseBlock && bb != endIfBlock)
+		{
+			outputIntent();
+			m_Out << "else()\n";
+		}
+		else if (bb == endIfBlock)
+		{
+			outputIntent();
+			m_Out << "endif()\n";
+			m_CondElseEndifStack.pop_back();
+			--m_CurrentIntent;
+		}
+	}
+
 	++m_CurrentIntent;
 	for (auto& ins : *bb)
 	{
@@ -355,7 +493,7 @@ void CMakeBackend::outputBasicBlock(BasicBlock* bb)
 
 void CMakeBackend::evalOperand(llvm::Value* v)
 {
-	if (const auto con = dyn_cast<Constant>(v))
+	if (const auto con = dyn_cast<Constant>(v); con && !isa<GlobalValue>(con))
 	{
 		evalConstant(con);
 	}
@@ -363,7 +501,7 @@ void CMakeBackend::evalOperand(llvm::Value* v)
 
 std::string CMakeBackend::evalOperand(llvm::Value* v, llvm::StringRef nameHint)
 {
-	if (const auto con = dyn_cast<Constant>(v))
+	if (const auto con = dyn_cast<Constant>(v); con && !isa<GlobalValue>(con))
 	{
 		return evalConstant(con, nameHint);
 	}

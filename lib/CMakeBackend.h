@@ -71,7 +71,7 @@ namespace LLVMCMakeBackend
 		void visitAllocaInst(llvm::AllocaInst& I);
 		void visitGetElementPtrInst(llvm::GetElementPtrInst& I);
 
-		void visitBranchInst(BranchInst& I);
+		void visitBranchInst(llvm::BranchInst& I);
 
 	private:
 		llvm::raw_ostream& m_Out;
@@ -79,6 +79,8 @@ namespace LLVMCMakeBackend
 
 		std::size_t m_CurrentIntent;
 		void outputIntent();
+
+		std::vector<std::pair<llvm::BasicBlock*, llvm::BasicBlock*>> m_CondElseEndifStack;
 
 		std::unordered_map<llvm::Value*, std::size_t> m_TemporaryID;
 		std::size_t m_CurrentTemporaryID;
@@ -90,7 +92,9 @@ namespace LLVMCMakeBackend
 		std::string getFunctionReturnValueName(llvm::Function* v);
 
 		std::unordered_map<llvm::Type*, std::string> m_TypeNameCache;
+		std::unordered_map<llvm::Type*, std::size_t> m_TypeFieldCountCache;
 		llvm::StringRef getTypeName(llvm::Type* type);
+		std::size_t getTypeFieldCount(llvm::Type* type);
 
 		void outputFunction(llvm::Function& f);
 		void outputBasicBlock(llvm::BasicBlock* bb);
