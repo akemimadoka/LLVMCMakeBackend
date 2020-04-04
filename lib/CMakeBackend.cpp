@@ -199,13 +199,19 @@ void CMakeBackend::visitAllocaInst(llvm::AllocaInst& I)
 	{
 		const auto size = constSize->getValue().getZExtValue();
 
+		const auto objectName = allocateTemporaryName();
+
 		outputIntent();
-		m_Out << "set(" << getValueName(&I) << " \"";
+		m_Out << "set(" << objectName << " \"";
 		for (std::size_t i = 0; i < size; ++i)
 		{
 			outputTypeLayout(elemType);
 		}
 		m_Out << "\")\n";
+
+		// 结果为指针
+		outputIntent();
+		m_Out << "set(" << getValueName(&I) << " " << objectName << ")\n";
 	}
 	else
 	{
