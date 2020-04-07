@@ -5,6 +5,9 @@ using namespace LLVMCMakeBackend;
 
 bool CMakeBackend::doInitialization(Module& M)
 {
+	m_DataLayout = std::make_unique<DataLayout>(&M);
+	m_IntrinsicLowering = std::make_unique<IntrinsicLowering>(*m_DataLayout);
+
 	for (auto& global : M.globals())
 	{
 		evalConstant(global.getInitializer(), global.getName());
@@ -17,6 +20,9 @@ bool CMakeBackend::doFinalization(Module& M)
 {
 	// TODO: 输出类型布局元数据
 
+	m_IntrinsicLowering.reset();
+	m_DataLayout.reset();
+
 	return false;
 }
 
@@ -27,14 +33,47 @@ bool CMakeBackend::runOnFunction(Function& F)
 	m_CurrentTemporaryID = 0;
 	m_TemporaryID.clear();
 
+	const auto modified = lowerIntrinsics(F);
+#ifndef NDEBUG
+	if (modified)
+	{
+		outs() << "Function modified: \n" << F << "\n";
+	}
+#endif
+
 	outputFunction(F);
 
-	return false;
+	return modified;
 }
 
-void CMakeBackend::GenerateIntrinsics()
+void CMakeBackend::visitInstruction(Instruction& I)
 {
-	assert(m_CurrentIntent == 0);
+	errs() << "Unimplemented: " << I << "\n";
+
+	assert(!"Unimplemented");
+	std::terminate();
+}
+
+void CMakeBackend::visitCastInst(CastInst& I)
+{
+	const auto srcType = I.getSrcTy();
+	const auto dstType = I.getDestTy();
+
+	const auto src = I.getOperand(0);
+	const auto resultName = getValueName(&I);
+
+	// TODO: 当前未实现转换，仅允许值不实际发生变化的情况
+	if (srcType == dstType || (srcType->isPointerTy() && dstType->isPointerTy()) ||
+	    (srcType->isIntegerTy() && dstType->isIntegerTy()))
+	{
+		evalOperand(src);
+		outputIntent();
+		m_Out << "set(" << resultName << " ${" << getValueName(src) << "})\n";
+		return;
+	}
+
+	assert(!"Unimplemented");
+	std::terminate();
 }
 
 void CMakeBackend::visitReturnInst(ReturnInst& i)
@@ -60,6 +99,11 @@ void CMakeBackend::visitCallInst(CallInst& I)
 	if (isa<InlineAsm>(I.getCalledValue()))
 	{
 		visitInlineAsm(I);
+		return;
+	}
+	else if (I.getCalledFunction()->isIntrinsic())
+	{
+		visitIntrinsics(I);
 		return;
 	}
 
@@ -132,61 +176,13 @@ void CMakeBackend::visitBinaryOperator(llvm::BinaryOperator& I)
 
 void CMakeBackend::visitLoadInst(llvm::LoadInst& I)
 {
-	const auto operand = getValueName(I.getOperand(0));
-	evalOperand(I.getOperand(0));
-
 	const auto destName = getValueName(&I);
-
-	const auto headName = allocateTemporaryName();
-	outputIntent();
-	m_Out << "list(GET ${" << operand << "} 0 " << headName << ")\n";
-	outputIntent();
-	m_Out << "if(${" << headName << "} STREQUAL \"_LLVM_CMAKE_GEP_\")\n";
-	outputIntent();
-	const auto listRef = allocateTemporaryName();
-	m_Out << "\tlist(GET ${" << operand << "} 1 " << listRef << ")\n";
-	outputIntent();
-	const auto idxValue = allocateTemporaryName();
-	m_Out << "\tlist(GET ${" << operand << "} 2 " << idxValue << ")\n";
-	outputIntent();
-	m_Out << "\tlist(GET ${${" << listRef << "}} ${" << idxValue << "} " << destName << ")\n";
-	outputIntent();
-	m_Out << "else()\n";
-	outputIntent();
-	m_Out << "\tset(" << destName << " ${${" << operand << "}})\n";
-	outputIntent();
-	m_Out << "endif()\n";
+	outputLoad(destName, I.getOperand(0));
 }
 
 void CMakeBackend::visitStoreInst(llvm::StoreInst& I)
 {
-	const auto operandValue = getValueName(I.getOperand(0));
-	evalOperand(I.getOperand(0));
-
-	const auto operandDest = getValueName(I.getOperand(1));
-	evalOperand(I.getOperand(1));
-
-	const auto headName = allocateTemporaryName();
-	outputIntent();
-	m_Out << "list(GET ${" << operandDest << "} 0 " << headName << ")\n";
-	outputIntent();
-	m_Out << "if(${" << headName << "} STREQUAL \"_LLVM_CMAKE_GEP_\")\n";
-	outputIntent();
-	const auto listRef = allocateTemporaryName();
-	m_Out << "\tlist(GET ${" << operandDest << "} 1 " << listRef << ")\n";
-	outputIntent();
-	const auto idxValue = allocateTemporaryName();
-	m_Out << "\tlist(GET ${" << operandDest << "} 2 " << idxValue << ")\n";
-	outputIntent();
-	m_Out << "\tlist(REMOVE_AT ${" << listRef << "} ${" << idxValue << "})\n";
-	outputIntent();
-	m_Out << "\tlist(INSERT ${" << listRef << "} ${" << idxValue << "} ${" << operandValue << "})\n";
-	outputIntent();
-	m_Out << "else()\n";
-	outputIntent();
-	m_Out << "\tset(${" << operandDest << "} ${" << operandValue << "})\n";
-	outputIntent();
-	m_Out << "endif()\n";
+	outputStore(I.getOperand(0), I.getOperand(1));
 }
 
 void CMakeBackend::visitAllocaInst(llvm::AllocaInst& I)
@@ -232,11 +228,15 @@ void CMakeBackend::visitGetElementPtrInst(llvm::GetElementPtrInst& I)
 	const auto ptrType = cast<PointerType>(ptrOperand->getType());
 	evalOperand(ptrOperand);
 
-	const auto listName = getValueName(ptrOperand);
+	const auto listPtrName = getValueName(ptrOperand);
 
 	std::size_t realIdx{};
+	// 系数及对应的变量名
+	std::vector<std::pair<std::size_t, std::string>> offsets;
+
 	auto pointeeType = ptrType->getElementType();
-	for (std::size_t i = 2; i < I.getNumOperands(); ++i)
+	const auto opCount = I.getNumOperands();
+	for (std::size_t i = 2; i < opCount; ++i)
 	{
 		const auto idxOperand = I.getOperand(i);
 		// TODO: 支持动态索引
@@ -266,14 +266,43 @@ void CMakeBackend::visitGetElementPtrInst(llvm::GetElementPtrInst& I)
 		}
 		else
 		{
-			assert(!"Not implemented");
-			std::terminate();
+			// TODO: 当前仅支持数组的动态索引，是否需要支持结构体的动态索引？
+			if (const auto arrayType = dyn_cast<ArrayType>(pointeeType))
+			{
+				evalOperand(idxOperand);
+				offsets.emplace_back(getTypeFieldCount(arrayType->getElementType()),
+				                     getValueName(idxOperand));
+			}
+			else
+			{
+				assert(!"Not implemented");
+				std::terminate();
+			}
 		}
 	}
 
-	outputIntent();
-	m_Out << "set(" << getValueName(&I) << " \"_LLVM_CMAKE_GEP_;" << listName << ";" << realIdx
-	      << "\")\n";
+	// TODO: 是否需要处理 listPtr 是胖指针的情况？
+	// 结果是指针
+	if (offsets.empty())
+	{
+		outputIntent();
+		m_Out << "set(" << getValueName(&I) << " \"_LLVM_CMAKE_GEP_;${" << listPtrName << "};" << realIdx
+		      << "\")\n";
+	}
+	else
+	{
+		const auto idxTempName = allocateTemporaryName();
+		outputIntent();
+		m_Out << "math(EXPR " << idxTempName << " \"" << realIdx;
+		for (const auto& [size, name] : offsets)
+		{
+			m_Out << " + " << size << " * ${" << name << "}";
+		}
+		m_Out << "\")\n";
+		outputIntent();
+		m_Out << "set(" << getValueName(&I) << " \"_LLVM_CMAKE_GEP_;${" << listPtrName << "};${"
+		      << idxTempName << "}\")\n";
+	}
 }
 
 void CMakeBackend::visitBranchInst(BranchInst& I)
@@ -319,6 +348,57 @@ void CMakeBackend::visitBranchInst(BranchInst& I)
 				std::terminate();
 			}
 		}
+	}
+}
+
+bool CMakeBackend::lowerIntrinsics(Function& f)
+{
+	auto lowered = false;
+
+	for (auto& bb : f)
+	{
+		for (auto iter = bb.begin(), end = bb.end(); iter != end;)
+		{
+			// TODO: 若 lower 后的 intrinsic 包含 intrinsic 的调用，需重新处理
+			if (const auto call = dyn_cast<CallInst>(iter++);
+			    call && call->getCalledFunction()->isIntrinsic() &&
+			    std::find(std::begin(ImplementedIntrinsics), std::end(ImplementedIntrinsics),
+			              call->getCalledFunction()->getIntrinsicID()) == std::end(ImplementedIntrinsics))
+			{
+				lowered = true;
+				m_IntrinsicLowering->LowerIntrinsicCall(call);
+			}
+		}
+	}
+
+	return lowered;
+}
+
+void CMakeBackend::visitIntrinsics(CallInst& call)
+{
+	const auto func = call.getCalledFunction();
+	assert(func && func->isIntrinsic());
+	const auto id = func->getIntrinsicID();
+	assert(id != Intrinsic::not_intrinsic);
+
+	switch (id)
+	{
+	case Intrinsic::memcpy: {
+		// 假设与 load + store 等价
+
+		const auto dstPtr = call.getArgOperand(0);
+		const auto srcPtr = call.getArgOperand(1);
+		// 忽略 size
+
+		const auto content = allocateTemporaryName();
+		outputLoad(content, srcPtr);
+		outputStore(content, dstPtr);
+
+		break;
+	}
+	default:
+		assert(!"Not implemented.");
+		std::terminate();
 	}
 }
 
@@ -433,6 +513,7 @@ std::size_t CMakeBackend::getTypeFieldCount(llvm::Type* type)
 		std::size_t result;
 		if (const auto structType = dyn_cast<StructType>(type))
 		{
+			result = 0;
 			for (std::size_t i = 0; i < structType->getNumElements(); ++i)
 			{
 				result += getTypeFieldCount(structType->getElementType(i));
@@ -453,6 +534,64 @@ std::size_t CMakeBackend::getTypeFieldCount(llvm::Type* type)
 	return iter->second;
 }
 
+llvm::StringRef CMakeBackend::getTypeZeroInitializer(llvm::Type* type)
+{
+	auto iter = m_TypeZeroInitializerCache.find(type);
+	if (iter == m_TypeZeroInitializerCache.end())
+	{
+		std::string zeroInitializer;
+		if (const auto structType = dyn_cast<StructType>(type))
+		{
+			const auto numFields = structType->getNumElements();
+			for (std::size_t i = 0; i < numFields; ++i)
+			{
+				zeroInitializer += getTypeZeroInitializer(structType->getElementType(i));
+				if (i != numFields - 1)
+				{
+					zeroInitializer += ';';
+				}
+			}
+		}
+		else if (const auto arrayType = dyn_cast<ArrayType>(type))
+		{
+			const auto size = arrayType->getNumElements();
+			auto singleElem = getTypeZeroInitializer(arrayType->getElementType());
+			for (std::size_t i = 0; i < size; ++i)
+			{
+				zeroInitializer += singleElem;
+				if (i != size - 1)
+				{
+					zeroInitializer += ';';
+				}
+			}
+		}
+		else if (const auto intType = dyn_cast<IntegerType>(type))
+		{
+			switch (intType->getBitWidth())
+			{
+			case 1:
+				zeroInitializer = "False";
+				break;
+			case 8:
+				// TODO: 空字符串？目前作为整数类型处理
+			default:
+				zeroInitializer = "0";
+				break;
+			}
+		}
+		else
+		{
+			assert(!"Unimplemented");
+			std::terminate();
+		}
+
+		std::tie(iter, std::ignore) =
+		    m_TypeZeroInitializerCache.emplace(type, std::move(zeroInitializer));
+	}
+
+	return iter->second;
+}
+
 void CMakeBackend::outputFunction(Function& f)
 {
 	m_Out << "function(" << f.getName();
@@ -466,6 +605,8 @@ void CMakeBackend::outputFunction(Function& f)
 	{
 		outputBasicBlock(&bb);
 	}
+
+	// TODO: 全局及通过参数的指针的修改需要显式 set 保留
 
 	m_Out << "endfunction()\n\n";
 }
@@ -544,8 +685,16 @@ std::string CMakeBackend::evalConstant(llvm::Constant* con, llvm::StringRef name
 	if (const auto i = dyn_cast<ConstantInt>(con))
 	{
 		outputIntent();
-		m_Out << "set(" << conName << " \"" << i->getValue() << "\")\n";
-		return conName;
+		m_Out << "set(" << conName << " \"";
+		if (i->getBitWidth() == 1)
+		{
+			m_Out << (i->getValue().isNullValue() ? "False" : "True");
+		}
+		else
+		{
+			m_Out << i->getValue();
+		}
+		m_Out << "\")\n";
 	}
 	else if (const auto arr = dyn_cast<ConstantArray>(con))
 	{
@@ -573,7 +722,6 @@ std::string CMakeBackend::evalConstant(llvm::Constant* con, llvm::StringRef name
 			}
 		}
 		m_Out << "\")\n";
-		return conName;
 	}
 	else if (const auto seq = dyn_cast<ConstantDataSequential>(con))
 	{
@@ -601,11 +749,19 @@ std::string CMakeBackend::evalConstant(llvm::Constant* con, llvm::StringRef name
 			}
 		}
 		m_Out << "\")\n";
-		return conName;
+	}
+	else if (const auto zeroInitializer = dyn_cast<ConstantAggregateZero>(con))
+	{
+		outputIntent();
+		m_Out << "set(" << conName << " \"" << getTypeZeroInitializer(con->getType()) << "\")\n";
+	}
+	else
+	{
+		errs() << "Err!\n";
+		std::terminate();
 	}
 
-	errs() << "Err!\n";
-	std::terminate();
+	return conName;
 }
 
 void CMakeBackend::outputTypeLayout(llvm::Type* type)
@@ -637,4 +793,68 @@ void CMakeBackend::outputTypeLayout(llvm::Type* type)
 	{
 		m_Out << getTypeName(type);
 	}
+}
+
+void CMakeBackend::outputLoad(llvm::StringRef resultName, llvm::Value* srcPtr)
+{
+	const auto operand = getValueName(srcPtr);
+	evalOperand(srcPtr);
+
+	const auto headName = allocateTemporaryName();
+
+	// 检查是否是胖指针，检查的是指针本身
+	outputIntent();
+	m_Out << "list(GET " << operand << " 0 " << headName << ")\n";
+	outputIntent();
+	m_Out << "if(${" << headName << "} STREQUAL \"_LLVM_CMAKE_GEP_\")\n";
+	outputIntent();
+	const auto listRef = allocateTemporaryName();
+	m_Out << "\tlist(GET " << operand << " 1 " << listRef << ")\n";
+	outputIntent();
+	const auto idxValue = allocateTemporaryName();
+	m_Out << "\tlist(GET " << operand << " 2 " << idxValue << ")\n";
+	outputIntent();
+	m_Out << "\tlist(GET ${${" << listRef << "}} ${" << idxValue << "} " << resultName << ")\n";
+	outputIntent();
+	m_Out << "else()\n";
+	outputIntent();
+	m_Out << "\tset(" << resultName << " ${${" << operand << "}})\n";
+	outputIntent();
+	m_Out << "endif()\n";
+}
+
+void CMakeBackend::outputStore(llvm::Value* value, llvm::Value* destPtr)
+{
+	const auto operandValue = getValueName(value);
+	evalOperand(value);
+
+	outputStore(operandValue, destPtr);
+}
+
+void CMakeBackend::outputStore(llvm::StringRef valueName, llvm::Value* destPtr)
+{
+	const auto operandDest = getValueName(destPtr);
+	evalOperand(destPtr);
+
+	const auto headName = allocateTemporaryName();
+	outputIntent();
+	m_Out << "list(GET " << operandDest << " 0 " << headName << ")\n";
+	outputIntent();
+	m_Out << "if(${" << headName << "} STREQUAL \"_LLVM_CMAKE_GEP_\")\n";
+	outputIntent();
+	const auto listRef = allocateTemporaryName();
+	m_Out << "\tlist(GET " << operandDest << " 1 " << listRef << ")\n";
+	outputIntent();
+	const auto idxValue = allocateTemporaryName();
+	m_Out << "\tlist(GET " << operandDest << " 2 " << idxValue << ")\n";
+	outputIntent();
+	m_Out << "\tlist(REMOVE_AT ${" << listRef << "} ${" << idxValue << "})\n";
+	outputIntent();
+	m_Out << "\tlist(INSERT ${" << listRef << "} ${" << idxValue << "} ${" << valueName << "})\n";
+	outputIntent();
+	m_Out << "else()\n";
+	outputIntent();
+	m_Out << "\tset(${" << operandDest << "} ${" << valueName << "})\n";
+	outputIntent();
+	m_Out << "endif()\n";
 }

@@ -7,6 +7,7 @@
 #include <llvm/ADT/SmallSet.h>
 #include <llvm/ADT/SmallString.h>
 #include <llvm/ADT/StringExtras.h>
+#include <llvm/CodeGen/IntrinsicLowering.h>
 #include <llvm/CodeGen/Passes.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/CFG.h>
@@ -23,13 +24,6 @@
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
-#include <llvm/MC/MCAsmInfo.h>
-#include <llvm/MC/MCContext.h>
-#include <llvm/MC/MCInstrInfo.h>
-#include <llvm/MC/MCObjectFileInfo.h>
-#include <llvm/MC/MCRegisterInfo.h>
-#include <llvm/MC/MCSubtargetInfo.h>
-#include <llvm/MC/MCSymbol.h>
 #include <llvm/Pass.h>
 #include <llvm/Support/FormattedStream.h>
 #include <llvm/Transforms/Scalar.h>
@@ -39,6 +33,8 @@ namespace LLVMCMakeBackend
 	class CMakeBackend : public llvm::FunctionPass, public llvm::InstVisitor<CMakeBackend>
 	{
 		inline static char ID;
+
+		static constexpr unsigned ImplementedIntrinsics[]{ llvm::Intrinsic::memcpy };
 
 	public:
 		explicit CMakeBackend(llvm::raw_ostream& outStream)
@@ -56,7 +52,9 @@ namespace LLVMCMakeBackend
 		bool doFinalization(llvm::Module& M) override;
 		bool runOnFunction(llvm::Function& F) override;
 
-		void GenerateIntrinsics();
+		void visitInstruction(llvm::Instruction& I);
+
+		void visitCastInst(llvm::CastInst& I);
 
 		void visitReturnInst(llvm::ReturnInst& i);
 
@@ -76,6 +74,11 @@ namespace LLVMCMakeBackend
 	private:
 		llvm::raw_ostream& m_Out;
 		llvm::Function* m_CurrentFunction;
+		std::unique_ptr<llvm::DataLayout> m_DataLayout;
+		std::unique_ptr<llvm::IntrinsicLowering> m_IntrinsicLowering;
+
+		bool lowerIntrinsics(llvm::Function& f);
+		void visitIntrinsics(llvm::CallInst& call);
 
 		std::size_t m_CurrentIntent;
 		void outputIntent();
@@ -92,9 +95,13 @@ namespace LLVMCMakeBackend
 		std::string getFunctionReturnValueName(llvm::Function* v);
 
 		std::unordered_map<llvm::Type*, std::string> m_TypeNameCache;
-		std::unordered_map<llvm::Type*, std::size_t> m_TypeFieldCountCache;
 		llvm::StringRef getTypeName(llvm::Type* type);
+
+		std::unordered_map<llvm::Type*, std::size_t> m_TypeFieldCountCache;
 		std::size_t getTypeFieldCount(llvm::Type* type);
+
+		std::unordered_map<llvm::Type*, std::string> m_TypeZeroInitializerCache;
+		llvm::StringRef getTypeZeroInitializer(llvm::Type* type);
 
 		void outputFunction(llvm::Function& f);
 		void outputBasicBlock(llvm::BasicBlock* bb);
@@ -104,6 +111,10 @@ namespace LLVMCMakeBackend
 		std::string evalConstant(llvm::Constant* con, llvm::StringRef nameHint = "");
 
 		void outputTypeLayout(llvm::Type* type);
+
+		void outputLoad(llvm::StringRef resultName, llvm::Value* src);
+		void outputStore(llvm::Value* value, llvm::Value* dest);
+		void outputStore(llvm::StringRef valueName, llvm::Value* dest);
 	};
 } // namespace LLVMCMakeBackend
 
