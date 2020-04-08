@@ -41,7 +41,7 @@ bool CMakeBackend::runOnFunction(Function& F)
 	}
 #endif
 
-	outputFunction(F);
+	emitFunction(F);
 
 	return modified;
 }
@@ -67,7 +67,7 @@ void CMakeBackend::visitCastInst(CastInst& I)
 	    (srcType->isIntegerTy() && dstType->isIntegerTy()))
 	{
 		evalOperand(src);
-		outputIntent();
+		emitIntent();
 		m_Out << "set(" << resultName << " ${" << getValueName(src) << "})\n";
 		return;
 	}
@@ -85,12 +85,12 @@ void CMakeBackend::visitReturnInst(ReturnInst& i)
 	{
 		evalOperand(i.getOperand(0));
 		const auto opName = getValueName(i.getOperand(0));
-		outputIntent();
+		emitIntent();
 		m_Out << "set(" << getFunctionReturnValueName(m_CurrentFunction) << " ${" << opName
 		      << "} PARENT_SCOPE)\n";
 	}
 
-	outputIntent();
+	emitIntent();
 	m_Out << "return()\n";
 }
 
@@ -113,7 +113,7 @@ void CMakeBackend::visitCallInst(CallInst& I)
 	}
 
 	const auto func = I.getCalledFunction();
-	outputIntent();
+	emitIntent();
 	m_Out << func->getName() << "(";
 	for (std::size_t i = 0; i < I.getNumArgOperands(); ++i)
 	{
@@ -124,7 +124,7 @@ void CMakeBackend::visitCallInst(CallInst& I)
 
 	if (!func->getReturnType()->isVoidTy())
 	{
-		outputIntent();
+		emitIntent();
 		m_Out << "set(" << getValueName(&I) << " ${" << getFunctionReturnValueName(func) << "})\n";
 	}
 }
@@ -132,7 +132,7 @@ void CMakeBackend::visitCallInst(CallInst& I)
 void CMakeBackend::visitInlineAsm(CallInst& I)
 {
 	const auto as = cast<InlineAsm>(I.getCalledValue());
-	outputIntent();
+	emitIntent();
 	m_Out << as->getAsmString() << "\n";
 }
 
@@ -146,7 +146,7 @@ void CMakeBackend::visitBinaryOperator(llvm::BinaryOperator& I)
 	evalOperand(I.getOperand(0));
 	evalOperand(I.getOperand(1));
 
-	outputIntent();
+	emitIntent();
 	m_Out << "math(EXPR " << name << " \"${" << operandLhs << "} ";
 
 	switch (I.getOpcode())
@@ -177,12 +177,12 @@ void CMakeBackend::visitBinaryOperator(llvm::BinaryOperator& I)
 void CMakeBackend::visitLoadInst(llvm::LoadInst& I)
 {
 	const auto destName = getValueName(&I);
-	outputLoad(destName, I.getOperand(0));
+	emitLoad(destName, I.getOperand(0));
 }
 
 void CMakeBackend::visitStoreInst(llvm::StoreInst& I)
 {
-	outputStore(I.getOperand(0), I.getOperand(1));
+	emitStore(I.getOperand(0), I.getOperand(1));
 }
 
 void CMakeBackend::visitAllocaInst(llvm::AllocaInst& I)
@@ -197,16 +197,16 @@ void CMakeBackend::visitAllocaInst(llvm::AllocaInst& I)
 
 		const auto objectName = allocateTemporaryName();
 
-		outputIntent();
+		emitIntent();
 		m_Out << "set(" << objectName << " \"";
 		for (std::size_t i = 0; i < size; ++i)
 		{
-			outputTypeLayout(elemType);
+			emitTypeLayout(elemType);
 		}
 		m_Out << "\")\n";
 
 		// 结果为指针
-		outputIntent();
+		emitIntent();
 		m_Out << "set(" << getValueName(&I) << " " << objectName << ")\n";
 	}
 	else
@@ -285,21 +285,21 @@ void CMakeBackend::visitGetElementPtrInst(llvm::GetElementPtrInst& I)
 	// 结果是指针
 	if (offsets.empty())
 	{
-		outputIntent();
+		emitIntent();
 		m_Out << "set(" << getValueName(&I) << " \"_LLVM_CMAKE_GEP_;${" << listPtrName << "};" << realIdx
 		      << "\")\n";
 	}
 	else
 	{
 		const auto idxTempName = allocateTemporaryName();
-		outputIntent();
+		emitIntent();
 		m_Out << "math(EXPR " << idxTempName << " \"" << realIdx;
 		for (const auto& [size, name] : offsets)
 		{
 			m_Out << " + " << size << " * ${" << name << "}";
 		}
 		m_Out << "\")\n";
-		outputIntent();
+		emitIntent();
 		m_Out << "set(" << getValueName(&I) << " \"_LLVM_CMAKE_GEP_;${" << listPtrName << "};${"
 		      << idxTempName << "}\")\n";
 	}
@@ -312,7 +312,7 @@ void CMakeBackend::visitBranchInst(BranchInst& I)
 		const auto cond = I.getCondition();
 		evalOperand(cond);
 		const auto condName = getValueName(cond);
-		outputIntent();
+		emitIntent();
 		m_Out << "if(${" << condName << "})\n";
 		const auto trueBranch = I.getSuccessor(0);
 		const auto falseBranch = I.getSuccessor(1);
@@ -391,8 +391,8 @@ void CMakeBackend::visitIntrinsics(CallInst& call)
 		// 忽略 size
 
 		const auto content = allocateTemporaryName();
-		outputLoad(content, srcPtr);
-		outputStore(content, dstPtr);
+		emitLoad(content, srcPtr);
+		emitStore(content, dstPtr);
 
 		break;
 	}
@@ -402,7 +402,7 @@ void CMakeBackend::visitIntrinsics(CallInst& call)
 	}
 }
 
-void CMakeBackend::outputIntent()
+void CMakeBackend::emitIntent()
 {
 	for (std::size_t i = 0; i < m_CurrentIntent; ++i)
 	{
@@ -592,7 +592,7 @@ llvm::StringRef CMakeBackend::getTypeZeroInitializer(llvm::Type* type)
 	return iter->second;
 }
 
-void CMakeBackend::outputFunction(Function& f)
+void CMakeBackend::emitFunction(Function& f)
 {
 	m_Out << "function(" << f.getName();
 	for (auto& arg : f.args())
@@ -603,7 +603,7 @@ void CMakeBackend::outputFunction(Function& f)
 
 	for (auto& bb : f)
 	{
-		outputBasicBlock(&bb);
+		emitBasicBlock(&bb);
 	}
 
 	// TODO: 全局及通过参数的指针的修改需要显式 set 保留
@@ -611,19 +611,19 @@ void CMakeBackend::outputFunction(Function& f)
 	m_Out << "endfunction()\n\n";
 }
 
-void CMakeBackend::outputBasicBlock(BasicBlock* bb)
+void CMakeBackend::emitBasicBlock(BasicBlock* bb)
 {
 	if (!m_CondElseEndifStack.empty())
 	{
 		if (const auto [elseBlock, endIfBlock] = m_CondElseEndifStack.back();
 		    bb == elseBlock && bb != endIfBlock)
 		{
-			outputIntent();
+			emitIntent();
 			m_Out << "else()\n";
 		}
 		else if (bb == endIfBlock)
 		{
-			outputIntent();
+			emitIntent();
 			m_Out << "endif()\n";
 			m_CondElseEndifStack.pop_back();
 			--m_CurrentIntent;
@@ -684,7 +684,7 @@ std::string CMakeBackend::evalConstant(llvm::Constant* con, llvm::StringRef name
 
 	if (const auto i = dyn_cast<ConstantInt>(con))
 	{
-		outputIntent();
+		emitIntent();
 		m_Out << "set(" << conName << " \"";
 		if (i->getBitWidth() == 1)
 		{
@@ -698,7 +698,7 @@ std::string CMakeBackend::evalConstant(llvm::Constant* con, llvm::StringRef name
 	}
 	else if (const auto arr = dyn_cast<ConstantArray>(con))
 	{
-		outputIntent();
+		emitIntent();
 		m_Out << "set(" << conName << " \"";
 		const auto elemType = cast<ArrayType>(arr->getType())->getElementType();
 		if (elemType->isIntegerTy(8))
@@ -725,7 +725,7 @@ std::string CMakeBackend::evalConstant(llvm::Constant* con, llvm::StringRef name
 	}
 	else if (const auto seq = dyn_cast<ConstantDataSequential>(con))
 	{
-		outputIntent();
+		emitIntent();
 		m_Out << "set(" << conName << " \"";
 		const auto elemType = cast<ArrayType>(seq->getType())->getElementType();
 		if (elemType->isIntegerTy(8))
@@ -752,7 +752,7 @@ std::string CMakeBackend::evalConstant(llvm::Constant* con, llvm::StringRef name
 	}
 	else if (const auto zeroInitializer = dyn_cast<ConstantAggregateZero>(con))
 	{
-		outputIntent();
+		emitIntent();
 		m_Out << "set(" << conName << " \"" << getTypeZeroInitializer(con->getType()) << "\")\n";
 	}
 	else
@@ -764,13 +764,13 @@ std::string CMakeBackend::evalConstant(llvm::Constant* con, llvm::StringRef name
 	return conName;
 }
 
-void CMakeBackend::outputTypeLayout(llvm::Type* type)
+void CMakeBackend::emitTypeLayout(llvm::Type* type)
 {
 	if (const auto structType = dyn_cast<StructType>(type))
 	{
 		for (std::size_t i = 0; i < structType->getNumElements(); ++i)
 		{
-			outputTypeLayout(structType->getElementType(i));
+			emitTypeLayout(structType->getElementType(i));
 			if (i != structType->getNumElements() - 1)
 			{
 				m_Out << ";";
@@ -782,7 +782,7 @@ void CMakeBackend::outputTypeLayout(llvm::Type* type)
 		const auto elemType = arrayType->getElementType();
 		for (std::size_t i = 0; i < arrayType->getArrayNumElements(); ++i)
 		{
-			outputTypeLayout(elemType);
+			emitTypeLayout(elemType);
 			if (i != arrayType->getArrayNumElements() - 1)
 			{
 				m_Out << ";";
@@ -795,7 +795,7 @@ void CMakeBackend::outputTypeLayout(llvm::Type* type)
 	}
 }
 
-void CMakeBackend::outputLoad(llvm::StringRef resultName, llvm::Value* srcPtr)
+void CMakeBackend::emitLoad(llvm::StringRef resultName, llvm::Value* srcPtr)
 {
 	const auto operand = getValueName(srcPtr);
 	evalOperand(srcPtr);
@@ -803,58 +803,58 @@ void CMakeBackend::outputLoad(llvm::StringRef resultName, llvm::Value* srcPtr)
 	const auto headName = allocateTemporaryName();
 
 	// 检查是否是胖指针，检查的是指针本身
-	outputIntent();
+	emitIntent();
 	m_Out << "list(GET " << operand << " 0 " << headName << ")\n";
-	outputIntent();
+	emitIntent();
 	m_Out << "if(${" << headName << "} STREQUAL \"_LLVM_CMAKE_GEP_\")\n";
-	outputIntent();
+	emitIntent();
 	const auto listRef = allocateTemporaryName();
 	m_Out << "\tlist(GET " << operand << " 1 " << listRef << ")\n";
-	outputIntent();
+	emitIntent();
 	const auto idxValue = allocateTemporaryName();
 	m_Out << "\tlist(GET " << operand << " 2 " << idxValue << ")\n";
-	outputIntent();
+	emitIntent();
 	m_Out << "\tlist(GET ${${" << listRef << "}} ${" << idxValue << "} " << resultName << ")\n";
-	outputIntent();
+	emitIntent();
 	m_Out << "else()\n";
-	outputIntent();
+	emitIntent();
 	m_Out << "\tset(" << resultName << " ${${" << operand << "}})\n";
-	outputIntent();
+	emitIntent();
 	m_Out << "endif()\n";
 }
 
-void CMakeBackend::outputStore(llvm::Value* value, llvm::Value* destPtr)
+void CMakeBackend::emitStore(llvm::Value* value, llvm::Value* destPtr)
 {
 	const auto operandValue = getValueName(value);
 	evalOperand(value);
 
-	outputStore(operandValue, destPtr);
+	emitStore(operandValue, destPtr);
 }
 
-void CMakeBackend::outputStore(llvm::StringRef valueName, llvm::Value* destPtr)
+void CMakeBackend::emitStore(llvm::StringRef valueName, llvm::Value* destPtr)
 {
 	const auto operandDest = getValueName(destPtr);
 	evalOperand(destPtr);
 
 	const auto headName = allocateTemporaryName();
-	outputIntent();
+	emitIntent();
 	m_Out << "list(GET " << operandDest << " 0 " << headName << ")\n";
-	outputIntent();
+	emitIntent();
 	m_Out << "if(${" << headName << "} STREQUAL \"_LLVM_CMAKE_GEP_\")\n";
-	outputIntent();
+	emitIntent();
 	const auto listRef = allocateTemporaryName();
 	m_Out << "\tlist(GET " << operandDest << " 1 " << listRef << ")\n";
-	outputIntent();
+	emitIntent();
 	const auto idxValue = allocateTemporaryName();
 	m_Out << "\tlist(GET " << operandDest << " 2 " << idxValue << ")\n";
-	outputIntent();
+	emitIntent();
 	m_Out << "\tlist(REMOVE_AT ${" << listRef << "} ${" << idxValue << "})\n";
-	outputIntent();
+	emitIntent();
 	m_Out << "\tlist(INSERT ${" << listRef << "} ${" << idxValue << "} ${" << valueName << "})\n";
-	outputIntent();
+	emitIntent();
 	m_Out << "else()\n";
-	outputIntent();
+	emitIntent();
 	m_Out << "\tset(${" << operandDest << "} ${" << valueName << "})\n";
-	outputIntent();
+	emitIntent();
 	m_Out << "endif()\n";
 }

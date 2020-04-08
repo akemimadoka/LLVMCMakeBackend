@@ -81,7 +81,7 @@ namespace LLVMCMakeBackend
 		void visitIntrinsics(llvm::CallInst& call);
 
 		std::size_t m_CurrentIntent;
-		void outputIntent();
+		void emitIntent();
 
 		std::vector<std::pair<llvm::BasicBlock*, llvm::BasicBlock*>> m_CondElseEndifStack;
 
@@ -103,18 +103,18 @@ namespace LLVMCMakeBackend
 		std::unordered_map<llvm::Type*, std::string> m_TypeZeroInitializerCache;
 		llvm::StringRef getTypeZeroInitializer(llvm::Type* type);
 
-		void outputFunction(llvm::Function& f);
-		void outputBasicBlock(llvm::BasicBlock* bb);
+		void emitFunction(llvm::Function& f);
+		void emitBasicBlock(llvm::BasicBlock* bb);
 
 		void evalOperand(llvm::Value* v);
 		std::string evalOperand(llvm::Value* v, llvm::StringRef nameHint);
 		std::string evalConstant(llvm::Constant* con, llvm::StringRef nameHint = "");
 
-		void outputTypeLayout(llvm::Type* type);
+		void emitTypeLayout(llvm::Type* type);
 
-		void outputLoad(llvm::StringRef resultName, llvm::Value* src);
-		void outputStore(llvm::Value* value, llvm::Value* dest);
-		void outputStore(llvm::StringRef valueName, llvm::Value* dest);
+		void emitLoad(llvm::StringRef resultName, llvm::Value* src);
+		void emitStore(llvm::Value* value, llvm::Value* dest);
+		void emitStore(llvm::StringRef valueName, llvm::Value* dest);
 	};
 } // namespace LLVMCMakeBackend
 
