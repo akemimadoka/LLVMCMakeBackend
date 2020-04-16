@@ -3,6 +3,8 @@
 
 #include "CMakeTargetMachine.h"
 
+#include <unordered_set>
+
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallSet.h>
 #include <llvm/ADT/SmallString.h>
@@ -34,7 +36,7 @@ namespace LLVMCMakeBackend
 	{
 		inline static char ID;
 
-		static constexpr unsigned ImplementedIntrinsics[]{ llvm::Intrinsic::memcpy };
+		static constexpr unsigned ImplementedIntrinsics[]{ llvm::Intrinsic::memcpy, llvm::Intrinsic::memset };
 
 	public:
 		explicit CMakeBackend(llvm::raw_ostream& outStream)
@@ -65,7 +67,6 @@ namespace LLVMCMakeBackend
 
 		void visitLoadInst(llvm::LoadInst& I);
 		void visitStoreInst(llvm::StoreInst& I);
-
 		void visitAllocaInst(llvm::AllocaInst& I);
 		void visitGetElementPtrInst(llvm::GetElementPtrInst& I);
 
@@ -74,10 +75,15 @@ namespace LLVMCMakeBackend
 	private:
 		llvm::raw_ostream& m_Out;
 		llvm::Function* m_CurrentFunction;
+		std::vector<std::string> m_CurrentFunctionLocalEntityNames;
 		std::unique_ptr<llvm::DataLayout> m_DataLayout;
 		std::unique_ptr<llvm::IntrinsicLowering> m_IntrinsicLowering;
 
+		void emitModulePrologue(llvm::Module& m);
+		void emitModuleEpilogue(llvm::Module& m);
+
 		bool lowerIntrinsics(llvm::Function& f);
+		void emitIntrinsics();
 		void visitIntrinsics(llvm::CallInst& call);
 
 		std::size_t m_CurrentIntent;
@@ -92,7 +98,8 @@ namespace LLVMCMakeBackend
 		std::string getTemporaryName(std::size_t id);
 		std::string allocateTemporaryName();
 		std::string getValueName(llvm::Value* v);
-		std::string getFunctionReturnValueName(llvm::Function* v);
+		std::string getFunctionReturnValueName(llvm::Function* f);
+		std::string getFunctionModifiedExternalVariableListName(llvm::Function* f);
 
 		std::unordered_map<llvm::Type*, std::string> m_TypeNameCache;
 		llvm::StringRef getTypeName(llvm::Type* type);
@@ -103,7 +110,15 @@ namespace LLVMCMakeBackend
 		std::unordered_map<llvm::Type*, std::string> m_TypeZeroInitializerCache;
 		llvm::StringRef getTypeZeroInitializer(llvm::Type* type);
 
+		std::unordered_map<llvm::Function*, std::unordered_set<llvm::GlobalValue*>>
+		    m_FunctionRefernecedGlobalValues;
+
+		std::unordered_set<llvm::GlobalValue*> const& getReferencedGlobalValues(llvm::Function& f);
+
 		void emitFunction(llvm::Function& f);
+		void emitFunctionPrologue(llvm::Function& f);
+		void emitFunctionEpilogue(llvm::Function& f);
+
 		void emitBasicBlock(llvm::BasicBlock* bb);
 
 		void evalOperand(llvm::Value* v);

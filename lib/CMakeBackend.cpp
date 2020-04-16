@@ -3,22 +3,142 @@
 using namespace llvm;
 using namespace LLVMCMakeBackend;
 
+// 所有以 _LLVM_CMAKE_ 开头的标识符都为本实现保留，用户不得使用，因此可以假设此类命名不会和用户冲突
+// 定义这类标识符为 丑命名
+
+namespace
+{
+	// NOTE:
+	// 涉及指针的操作时，所有内部实体名称必须为丑命名，因为间接访问时可能获得的是函数内实体而不是外部的
+
+	// 指针可能为胖指针，其他情况都为引用实体的名称
+
+	// 指针的定义如下：
+	// pointer = fat-pointer | identifier
+	// fat-pointer = pointer-head, property-list, info-list
+	// pointer-head = "_LLVM_CMAKE_PTR"
+	// property-list = { ".", property }
+	// property = "GEP" | "EXT"
+	// info-list = { ":", info }
+	// info = <any char except ":">
+
+	// 目前包含的属性有 GEP 表示 gep 而来的指针，以及 EXT 表示引用外部实体的指针
+	// info 按照 property 顺序排列
+	// 对于 GEP，info 有 2 个，按顺序为偏移和引用的实体名称
+	// 对于 EXT，若指针不为 GEP，info 有 1 个，是引用的实体的名称，否则仅作为标记，不包含 info
+
+	// 当前的实现偷懒，并未完全实现上述描述（
+
+	constexpr const char CMakeIntrinsics[] =
+	    R"CMakeIntrinsics(set(_LLVM_CMAKE_CURRENT_DEPTH "0")
+
+function(_LLVM_CMAKE_EVAL)
+	cmake_parse_arguments(ARGUMENT "NO_LOCK" "CONTENT;PATH" "" ${ARGN})
+	if(NOT DEFINED ARGUMENT_CONTENT)
+		message(FATAL_ERROR "No content provided")
+	endif()
+	if(NOT DEFINED ARGUMENT_PATH)
+		string(MD5 CONTENT_HASH "${ARGUMENT_CONTENT}")
+		set(ARGUMENT_PATH "${CMAKE_CURRENT_BINARY_DIR}/EvalCache/${CONTENT_HASH}.cmake")
+	endif()
+	if(NOT ARGUMENT_NO_LOCK)
+		file(LOCK "${ARGUMENT_PATH}.lock" GUARD FUNCTION RESULT_VARIABLE _lock_result)
+		if(NOT _lock_result EQUAL 0)
+			message(FATAL_ERROR "Cannot lock file \"${ARGUMENT_PATH}.lock\", result code is ${_lock_result}")
+		endif()
+	endif()
+	file(WRITE ${ARGUMENT_PATH} "${ARGUMENT_CONTENT}")
+	include(${ARGUMENT_PATH})
+endfunction()
+
+function(_LLVM_CMAKE_CONSTRUCT_GEP _LLVM_CMAKE_CONSTRUCT_GEP_OFFSET _LLVM_CMAKE_CONSTRUCT_GEP_ENTITY_PTR _LLVM_CMAKE_CONSTRUCT_GEP_RESULT_NAME)
+	if(_LLVM_CMAKE_CONSTRUCT_GEP_ENTITY_PTR MATCHES "^_LLVM_CMAKE_PTR.*\\.GEP.*:([0-9]+):(.+)$")
+		set(_LLVM_CMAKE_CONSTRUCT_GEP_ORIGIN_OFFSET ${CMAKE_MATCH_1})
+		set(_LLVM_CMAKE_CONSTRUCT_GEP_REF_ENTITY ${CMAKE_MATCH_2})
+		math(EXPR _LLVM_CMAKE_CONSTRUCT_GEP_OFFSET "${_LLVM_CMAKE_CONSTRUCT_GEP_OFFSET} + ${_LLVM_CMAKE_CONSTRUCT_GEP_ORIGIN_OFFSET}")
+		set(_LLVM_CMAKE_CONSTRUCT_GEP_RESULT "_LLVM_CMAKE_PTR.GEP.EXT:${_LLVM_CMAKE_CONSTRUCT_GEP_OFFSET}:${_LLVM_CMAKE_CONSTRUCT_GEP_REF_ENTITY}")
+	elseif(_LLVM_CMAKE_CONSTRUCT_GEP_ENTITY_PTR MATCHES "^_LLVM_CMAKE_PTR.*\\.EXT.*:(.+)$")
+		set(_LLVM_CMAKE_CONSTRUCT_GEP_REAL_PTR ${CMAKE_MATCH_1})
+		set(_LLVM_CMAKE_CONSTRUCT_GEP_RESULT "_LLVM_CMAKE_PTR.GEP.EXT:${_LLVM_CMAKE_CONSTRUCT_GEP_OFFSET}:${_LLVM_CMAKE_CONSTRUCT_GEP_REAL_PTR}")
+	else()
+		set(_LLVM_CMAKE_CONSTRUCT_GEP_RESULT "_LLVM_CMAKE_PTR.GEP:${_LLVM_CMAKE_CONSTRUCT_GEP_OFFSET}:${_LLVM_CMAKE_CONSTRUCT_GEP_ENTITY_PTR}")
+	endif()
+	set(${_LLVM_CMAKE_CONSTRUCT_GEP_RESULT_NAME} ${_LLVM_CMAKE_CONSTRUCT_GEP_RESULT} PARENT_SCOPE)
+endfunction()
+
+function(_LLVM_CMAKE_LOAD _LLVM_CMAKE_LOAD_PTR _LLVM_CMAKE_LOAD_RESULT_NAME)
+	if(_LLVM_CMAKE_LOAD_PTR MATCHES "^_LLVM_CMAKE_PTR.*\\.GEP.*:([0-9]+):(.+)$")
+		set(_LLVM_CMAKE_LOAD_OFFSET ${CMAKE_MATCH_1})
+		set(_LLVM_CMAKE_LOAD_REF_ENTITY ${CMAKE_MATCH_2})
+		list(GET ${_LLVM_CMAKE_LOAD_REF_ENTITY} ${_LLVM_CMAKE_LOAD_OFFSET} _LLVM_CMAKE_LOAD_RESULT)
+	elseif(_LLVM_CMAKE_LOAD_PTR MATCHES "^_LLVM_CMAKE_PTR.*\\.EXT.*:(.+)$")
+		set(_LLVM_CMAKE_LOAD_REAL_PTR ${CMAKE_MATCH_1})
+		set(_LLVM_CMAKE_LOAD_RESULT ${${_LLVM_CMAKE_LOAD_REAL_PTR}})
+	else()
+		set(_LLVM_CMAKE_LOAD_RESULT ${${_LLVM_CMAKE_LOAD_PTR}})
+	endif()
+	set(${_LLVM_CMAKE_LOAD_RESULT_NAME} ${_LLVM_CMAKE_LOAD_RESULT} PARENT_SCOPE)
+endfunction()
+
+function(_LLVM_CMAKE_STORE _LLVM_CMAKE_STORE_FUNC_MODLIST _LLVM_CMAKE_STORE_PTR)
+	if(_LLVM_CMAKE_STORE_PTR MATCHES "^_LLVM_CMAKE_PTR.*\\.GEP.*:([0-9]+):(.+)$")
+		set(_LLVM_CMAKE_STORE_OFFSET ${CMAKE_MATCH_1})
+		set(_LLVM_CMAKE_STORE_REF_ENTITY ${CMAKE_MATCH_2})
+		list(REMOVE_AT ${_LLVM_CMAKE_STORE_REF_ENTITY} ${_LLVM_CMAKE_STORE_OFFSET})
+		list(INSERT ${_LLVM_CMAKE_STORE_REF_ENTITY} ${_LLVM_CMAKE_STORE_OFFSET} ${ARGN})
+		set(_LLVM_CMAKE_STORE_MODIFIED_ENTITY ${_LLVM_CMAKE_STORE_REF_ENTITY})
+		if(${_LLVM_CMAKE_STORE_PTR} MATCHES "^_LLVM_CMAKE_PTR.*\\.EXT.*$")
+			list(APPEND ${_LLVM_CMAKE_STORE_FUNC_MODLIST} ${_LLVM_CMAKE_STORE_REF_ENTITY})
+		endif()
+	elseif(_LLVM_CMAKE_STORE_PTR MATCHES "^_LLVM_CMAKE_PTR.*\\.EXT.*:(.+)$")
+		set(_LLVM_CMAKE_STORE_REAL_PTR ${CMAKE_MATCH_1})
+		set(${_LLVM_CMAKE_STORE_REAL_PTR} ${ARGN})
+		set(_LLVM_CMAKE_STORE_MODIFIED_ENTITY ${_LLVM_CMAKE_STORE_REAL_PTR})
+		list(APPEND ${_LLVM_CMAKE_STORE_FUNC_MODLIST} ${_LLVM_CMAKE_STORE_REAL_PTR})
+	else()
+		set(${_LLVM_CMAKE_STORE_PTR} ${ARGN})
+		set(_LLVM_CMAKE_STORE_MODIFIED_ENTITY ${_LLVM_CMAKE_STORE_PTR})
+	endif()
+	set(${_LLVM_CMAKE_STORE_MODIFIED_ENTITY} ${${_LLVM_CMAKE_STORE_MODIFIED_ENTITY}} PARENT_SCOPE)
+	set(${_LLVM_CMAKE_STORE_FUNC_MODLIST} ${${_LLVM_CMAKE_STORE_FUNC_MODLIST}} PARENT_SCOPE)
+endfunction()
+
+macro(_LLVM_CMAKE_APPLY_MODIFIED_LIST _LLVM_CMAKE_APPLY_MODIFIED_LIST_FUNC_MODLIST)
+	list(REMOVE_DUPLICATES ${_LLVM_CMAKE_APPLY_MODIFIED_LIST_FUNC_MODLIST})
+	foreach(_LLVM_CMAKE_APPLY_MODIFIED_LIST_INTERNAL_ENTITY_NAME ${${_LLVM_CMAKE_APPLY_MODIFIED_LIST_FUNC_MODLIST}})
+		set(${_LLVM_CMAKE_APPLY_MODIFIED_LIST_INTERNAL_ENTITY_NAME}
+			${${_LLVM_CMAKE_APPLY_MODIFIED_LIST_INTERNAL_ENTITY_NAME}} PARENT_SCOPE)
+	endforeach()
+endmacro()
+
+function(_LLVM_CMAKE_MAKE_EXTERNAL_PTR _LLVM_CMAKE_MAKE_EXTERNAL_PTR_VALUE _LLVM_CMAKE_MAKE_EXTERNAL_PTR_RESULT_PTR)
+	if(_LLVM_CMAKE_MAKE_EXTERNAL_PTR_VALUE MATCHES "_LLVM_CMAKE_PTR.*")
+		if(NOT _LLVM_CMAKE_MAKE_EXTERNAL_PTR_VALUE MATCHES "_LLVM_CMAKE_PTR.*\\.EXT.*")
+			string(REGEX REPLACE "_LLVM_CMAKE_PTR([^:]*):" "_LLVM_CMAKE_PTR\\1.EXT:"
+				_LLVM_CMAKE_MAKE_EXTERNAL_PTR_VALUE ${_LLVM_CMAKE_MAKE_EXTERNAL_PTR_VALUE})
+		endif()
+	else()
+		set(_LLVM_CMAKE_MAKE_EXTERNAL_PTR_VALUE "_LLVM_CMAKE_PTR.EXT:${_LLVM_CMAKE_MAKE_EXTERNAL_PTR_VALUE}")
+	endif()
+	set(${_LLVM_CMAKE_MAKE_EXTERNAL_PTR_RESULT_PTR} ${_LLVM_CMAKE_MAKE_EXTERNAL_PTR_VALUE} PARENT_SCOPE)
+endfunction()
+
+)CMakeIntrinsics";
+} // namespace
+
 bool CMakeBackend::doInitialization(Module& M)
 {
 	m_DataLayout = std::make_unique<DataLayout>(&M);
 	m_IntrinsicLowering = std::make_unique<IntrinsicLowering>(*m_DataLayout);
 
-	for (auto& global : M.globals())
-	{
-		evalConstant(global.getInitializer(), global.getName());
-	}
+	emitModulePrologue(M);
 
 	return false;
 }
 
 bool CMakeBackend::doFinalization(Module& M)
 {
-	// TODO: 输出类型布局元数据
+	emitModuleEpilogue(M);
 
 	m_IntrinsicLowering.reset();
 	m_DataLayout.reset();
@@ -32,6 +152,7 @@ bool CMakeBackend::runOnFunction(Function& F)
 	m_CurrentIntent = 0;
 	m_CurrentTemporaryID = 0;
 	m_TemporaryID.clear();
+	m_CurrentFunctionLocalEntityNames.clear();
 
 	const auto modified = lowerIntrinsics(F);
 #ifndef NDEBUG
@@ -90,6 +211,26 @@ void CMakeBackend::visitReturnInst(ReturnInst& i)
 		      << "} PARENT_SCOPE)\n";
 	}
 
+	const auto functionModifiedListName =
+	    getFunctionModifiedExternalVariableListName(m_CurrentFunction);
+
+	if (!m_CurrentFunctionLocalEntityNames.empty())
+	{
+		emitIntent();
+		m_Out << "list(REMOVE_ITEM " << functionModifiedListName;
+		for (const auto& entityName : m_CurrentFunctionLocalEntityNames)
+		{
+			m_Out << " " << entityName;
+		}
+		m_Out << ")\n";
+	}
+
+	emitIntent();
+	m_Out << "_LLVM_CMAKE_APPLY_MODIFIED_LIST(" << functionModifiedListName << ")\n";
+	emitIntent();
+	m_Out << "set(" << functionModifiedListName << " ${" << functionModifiedListName
+	      << "} PARENT_SCOPE)\n";
+
 	emitIntent();
 	m_Out << "return()\n";
 }
@@ -107,18 +248,40 @@ void CMakeBackend::visitCallInst(CallInst& I)
 		return;
 	}
 
+	std::vector<std::string> argumentList;
+
 	for (std::size_t i = 0; i < I.getNumArgOperands(); ++i)
 	{
-		evalOperand(I.getArgOperand(i));
+		const auto op = I.getArgOperand(i);
+		evalOperand(op);
+
+		// 若传入参数是指针，标记指针为指向外部的
+		if (op->getType()->isPointerTy())
+		{
+			auto resultName = allocateTemporaryName();
+
+			emitIntent();
+			m_Out << "_LLVM_CMAKE_MAKE_EXTERNAL_PTR(${" << getValueName(op) << "} " << resultName
+			      << ")\n";
+
+			argumentList.emplace_back(std::move(resultName));
+		}
+		else
+		{
+			argumentList.emplace_back(getValueName(op));
+		}
 	}
 
 	const auto func = I.getCalledFunction();
 	emitIntent();
 	m_Out << func->getName() << "(";
-	for (std::size_t i = 0; i < I.getNumArgOperands(); ++i)
+	if (!argumentList.empty())
 	{
-		m_Out << "${" << getValueName(I.getArgOperand(i))
-		      << (i == I.getNumArgOperands() - 1 ? "}" : "} ");
+		m_Out << "${" << argumentList.front() << "}";
+		for (auto iter = std::next(argumentList.begin()); iter != argumentList.end(); ++iter)
+		{
+			m_Out << " ${" << *iter << "}";
+		}
 	}
 	m_Out << ")\n";
 
@@ -127,6 +290,10 @@ void CMakeBackend::visitCallInst(CallInst& I)
 		emitIntent();
 		m_Out << "set(" << getValueName(&I) << " ${" << getFunctionReturnValueName(func) << "})\n";
 	}
+
+	emitIntent();
+	m_Out << "list(APPEND " << getFunctionModifiedExternalVariableListName(m_CurrentFunction) << " ${"
+	      << getFunctionModifiedExternalVariableListName(func) << "})\n";
 }
 
 void CMakeBackend::visitInlineAsm(CallInst& I)
@@ -149,6 +316,8 @@ void CMakeBackend::visitBinaryOperator(llvm::BinaryOperator& I)
 	emitIntent();
 	m_Out << "math(EXPR " << name << " \"${" << operandLhs << "} ";
 
+	// TODO: 溢出处理
+	// NOTE: CMake 的 math 是将所有数作为 int64 处理的
 	switch (I.getOpcode())
 	{
 	default:
@@ -164,10 +333,28 @@ void CMakeBackend::visitBinaryOperator(llvm::BinaryOperator& I)
 		m_Out << "*";
 		break;
 	case Instruction::SDiv:
+	case Instruction::UDiv:
 		m_Out << "/";
 		break;
 	case Instruction::SRem:
+	case Instruction::URem:
 		m_Out << "%";
+		break;
+	case Instruction::Or:
+		m_Out << "|";
+		break;
+	case Instruction::And:
+		m_Out << "&";
+		break;
+	case Instruction::Xor:
+		m_Out << "^";
+		break;
+	case Instruction::Shl:
+		m_Out << "<<";
+		break;
+	case Instruction::LShr:
+	case Instruction::AShr:
+		m_Out << ">>";
 		break;
 	}
 
@@ -195,7 +382,7 @@ void CMakeBackend::visitAllocaInst(llvm::AllocaInst& I)
 	{
 		const auto size = constSize->getValue().getZExtValue();
 
-		const auto objectName = allocateTemporaryName();
+		auto objectName = allocateTemporaryName();
 
 		emitIntent();
 		m_Out << "set(" << objectName << " \"";
@@ -208,6 +395,8 @@ void CMakeBackend::visitAllocaInst(llvm::AllocaInst& I)
 		// 结果为指针
 		emitIntent();
 		m_Out << "set(" << getValueName(&I) << " " << objectName << ")\n";
+
+		m_CurrentFunctionLocalEntityNames.emplace_back(std::move(objectName));
 	}
 	else
 	{
@@ -239,7 +428,6 @@ void CMakeBackend::visitGetElementPtrInst(llvm::GetElementPtrInst& I)
 	for (std::size_t i = 2; i < opCount; ++i)
 	{
 		const auto idxOperand = I.getOperand(i);
-		// TODO: 支持动态索引
 		if (const auto constIdx = dyn_cast<ConstantInt>(idxOperand))
 		{
 			const auto idxValue = constIdx->getValue().getZExtValue();
@@ -281,28 +469,31 @@ void CMakeBackend::visitGetElementPtrInst(llvm::GetElementPtrInst& I)
 		}
 	}
 
+	// TODO: 处理引用全局及参数的情况
 	// TODO: 是否需要处理 listPtr 是胖指针的情况？
 	// 结果是指针
+
+	const auto offsetName = allocateTemporaryName();
+
 	if (offsets.empty())
 	{
 		emitIntent();
-		m_Out << "set(" << getValueName(&I) << " \"_LLVM_CMAKE_GEP_;${" << listPtrName << "};" << realIdx
-		      << "\")\n";
+		m_Out << "set(" << offsetName << " \"" << realIdx << "\")\n";
 	}
 	else
 	{
-		const auto idxTempName = allocateTemporaryName();
 		emitIntent();
-		m_Out << "math(EXPR " << idxTempName << " \"" << realIdx;
+		m_Out << "math(EXPR " << offsetName << " \"" << realIdx;
 		for (const auto& [size, name] : offsets)
 		{
 			m_Out << " + " << size << " * ${" << name << "}";
 		}
 		m_Out << "\")\n";
-		emitIntent();
-		m_Out << "set(" << getValueName(&I) << " \"_LLVM_CMAKE_GEP_;${" << listPtrName << "};${"
-		      << idxTempName << "}\")\n";
 	}
+
+	emitIntent();
+	m_Out << "_LLVM_CMAKE_CONSTRUCT_GEP(${" << offsetName << "} ${" << listPtrName << "} "
+	      << getValueName(&I) << ")\n";
 }
 
 void CMakeBackend::visitBranchInst(BranchInst& I)
@@ -351,6 +542,23 @@ void CMakeBackend::visitBranchInst(BranchInst& I)
 	}
 }
 
+void CMakeBackend::emitModulePrologue(llvm::Module& m)
+{
+	emitIntrinsics();
+
+	for (auto& global : m.globals())
+	{
+		evalConstant(global.getInitializer(), global.getName());
+	}
+
+	m_Out << "\n";
+}
+
+void CMakeBackend::emitModuleEpilogue(llvm::Module& m)
+{
+	// TODO: 输出类型布局元数据
+}
+
 bool CMakeBackend::lowerIntrinsics(Function& f)
 {
 	auto lowered = false;
@@ -374,6 +582,11 @@ bool CMakeBackend::lowerIntrinsics(Function& f)
 	return lowered;
 }
 
+void CMakeBackend::emitIntrinsics()
+{
+	m_Out << CMakeIntrinsics;
+}
+
 void CMakeBackend::visitIntrinsics(CallInst& call)
 {
 	const auto func = call.getCalledFunction();
@@ -393,6 +606,20 @@ void CMakeBackend::visitIntrinsics(CallInst& call)
 		const auto content = allocateTemporaryName();
 		emitLoad(content, srcPtr);
 		emitStore(content, dstPtr);
+
+		break;
+	}
+	case Intrinsic::memset: {
+		const auto dstPtr = call.getArgOperand(0);
+		[[maybe_unused]] const auto value = call.getArgOperand(1);
+		// 忽略 size
+
+		// 假设总为 0
+		assert(isa<ConstantInt>(value) && cast<ConstantInt>(value)->getValue().isNullValue());
+
+		evalOperand(dstPtr);
+		emitIntent();
+		m_Out << "list(TRANSFORM " << getValueName(dstPtr) << " REPLACE \".*\" \"0\")\n";
 
 		break;
 	}
@@ -428,7 +655,7 @@ std::size_t CMakeBackend::allocateTemporaryID()
 
 std::string CMakeBackend::getTemporaryName(std::size_t id)
 {
-	return "_LLVM_CMAKE_TEMP_" + std::to_string(id);
+	return "_LLVM_CMAKE_TEMP_${_LLVM_CMAKE_CURRENT_DEPTH}_" + std::to_string(id);
 }
 
 std::string CMakeBackend::allocateTemporaryName()
@@ -440,15 +667,25 @@ std::string CMakeBackend::getValueName(llvm::Value* v)
 {
 	if (v->hasName())
 	{
-		return static_cast<std::string>(v->getName());
+		if (dyn_cast<Function>(v))
+		{
+			return static_cast<std::string>(v->getName());
+		}
+
+		return "_LLVM_CMAKE_${_LLVM_CMAKE_CURRENT_DEPTH}_" + static_cast<std::string>(v->getName());
 	}
 
 	return getTemporaryName(getTemporaryID(v));
 }
 
-std::string CMakeBackend::getFunctionReturnValueName(llvm::Function* v)
+std::string CMakeBackend::getFunctionReturnValueName(llvm::Function* f)
 {
-	return "_LLVM_CMAKE_" + getValueName(v) + "_RETURN_VALUE";
+	return "_LLVM_CMAKE_" + getValueName(f) + "_RETURN_VALUE";
+}
+
+std::string CMakeBackend::getFunctionModifiedExternalVariableListName(llvm::Function* f)
+{
+	return "_LLVM_CMAKE_" + getValueName(f) + "_MODIFIED_EXTERNAL_VARIABLE_LIST";
 }
 
 llvm::StringRef CMakeBackend::getTypeName(llvm::Type* type)
@@ -592,23 +829,80 @@ llvm::StringRef CMakeBackend::getTypeZeroInitializer(llvm::Type* type)
 	return iter->second;
 }
 
+std::unordered_set<llvm::GlobalValue*> const&
+CMakeBackend::getReferencedGlobalValues(llvm::Function& f)
+{
+	auto iter = m_FunctionRefernecedGlobalValues.find(&f);
+	if (iter == m_FunctionRefernecedGlobalValues.end())
+	{
+		std::unordered_set<llvm::GlobalValue*> referencedGlobalValues;
+
+		for (auto& bb : f)
+		{
+			for (auto& ins : bb)
+			{
+				const auto opNum = ins.getNumOperands();
+				for (std::size_t i = 0; i < opNum; ++i)
+				{
+					const auto op = ins.getOperand(i);
+					if (const auto globalValue = dyn_cast<GlobalValue>(op))
+					{
+						referencedGlobalValues.emplace(globalValue);
+					}
+				}
+			}
+		}
+
+		std::tie(iter, std::ignore) =
+		    m_FunctionRefernecedGlobalValues.emplace(&f, std::move(referencedGlobalValues));
+	}
+
+	return iter->second;
+}
+
 void CMakeBackend::emitFunction(Function& f)
 {
-	m_Out << "function(" << f.getName();
-	for (auto& arg : f.args())
-	{
-		m_Out << " " << getValueName(&arg);
-	}
-	m_Out << ")\n";
+	m_Out << "function(" << f.getName() << ")\n";
+
+	++m_CurrentIntent;
+	emitFunctionPrologue(f);
+	--m_CurrentIntent;
 
 	for (auto& bb : f)
 	{
 		emitBasicBlock(&bb);
 	}
 
-	// TODO: 全局及通过参数的指针的修改需要显式 set 保留
+	++m_CurrentIntent;
+	emitFunctionEpilogue(f);
+	--m_CurrentIntent;
 
 	m_Out << "endfunction()\n\n";
+}
+
+void CMakeBackend::emitFunctionPrologue(llvm::Function& f)
+{
+	// 增加深度
+	// 不需要恢复，函数返回时会丢弃修改的值
+	emitIntent();
+	m_Out << "math(EXPR _LLVM_CMAKE_CURRENT_DEPTH \"${_LLVM_CMAKE_CURRENT_DEPTH} + 1\")\n";
+
+	// 输出参数
+	std::size_t index{};
+	for (auto& arg : f.args())
+	{
+		const auto argType = arg.getType();
+		const auto fieldCount = getTypeFieldCount(argType);
+
+		emitIntent();
+		m_Out << "list(SUBLIST ARGN " << index << " " << fieldCount << " " << getValueName(&arg)
+		      << ")\n";
+		index += fieldCount;
+	}
+}
+
+void CMakeBackend::emitFunctionEpilogue(llvm::Function& f)
+{
 }
 
 void CMakeBackend::emitBasicBlock(BasicBlock* bb)
@@ -671,7 +965,15 @@ std::string CMakeBackend::evalConstant(llvm::Constant* con, llvm::StringRef name
 		case Instruction::Sub:
 		case Instruction::Mul:
 		case Instruction::SDiv:
-		case Instruction::SRem: {
+		case Instruction::UDiv:
+		case Instruction::SRem:
+		case Instruction::URem:
+		case Instruction::Or:
+		case Instruction::And:
+		case Instruction::Xor:
+		case Instruction::Shl:
+		case Instruction::LShr:
+		case Instruction::AShr: {
 			visitBinaryOperator(*cast<llvm::BinaryOperator>(ce));
 			return conName;
 		}
@@ -802,25 +1104,8 @@ void CMakeBackend::emitLoad(llvm::StringRef resultName, llvm::Value* srcPtr)
 
 	const auto headName = allocateTemporaryName();
 
-	// 检查是否是胖指针，检查的是指针本身
 	emitIntent();
-	m_Out << "list(GET " << operand << " 0 " << headName << ")\n";
-	emitIntent();
-	m_Out << "if(${" << headName << "} STREQUAL \"_LLVM_CMAKE_GEP_\")\n";
-	emitIntent();
-	const auto listRef = allocateTemporaryName();
-	m_Out << "\tlist(GET " << operand << " 1 " << listRef << ")\n";
-	emitIntent();
-	const auto idxValue = allocateTemporaryName();
-	m_Out << "\tlist(GET " << operand << " 2 " << idxValue << ")\n";
-	emitIntent();
-	m_Out << "\tlist(GET ${${" << listRef << "}} ${" << idxValue << "} " << resultName << ")\n";
-	emitIntent();
-	m_Out << "else()\n";
-	emitIntent();
-	m_Out << "\tset(" << resultName << " ${${" << operand << "}})\n";
-	emitIntent();
-	m_Out << "endif()\n";
+	m_Out << "_LLVM_CMAKE_LOAD(${" << operand << "} " << resultName << ")\n";
 }
 
 void CMakeBackend::emitStore(llvm::Value* value, llvm::Value* destPtr)
@@ -836,25 +1121,7 @@ void CMakeBackend::emitStore(llvm::StringRef valueName, llvm::Value* destPtr)
 	const auto operandDest = getValueName(destPtr);
 	evalOperand(destPtr);
 
-	const auto headName = allocateTemporaryName();
 	emitIntent();
-	m_Out << "list(GET " << operandDest << " 0 " << headName << ")\n";
-	emitIntent();
-	m_Out << "if(${" << headName << "} STREQUAL \"_LLVM_CMAKE_GEP_\")\n";
-	emitIntent();
-	const auto listRef = allocateTemporaryName();
-	m_Out << "\tlist(GET " << operandDest << " 1 " << listRef << ")\n";
-	emitIntent();
-	const auto idxValue = allocateTemporaryName();
-	m_Out << "\tlist(GET " << operandDest << " 2 " << idxValue << ")\n";
-	emitIntent();
-	m_Out << "\tlist(REMOVE_AT ${" << listRef << "} ${" << idxValue << "})\n";
-	emitIntent();
-	m_Out << "\tlist(INSERT ${" << listRef << "} ${" << idxValue << "} ${" << valueName << "})\n";
-	emitIntent();
-	m_Out << "else()\n";
-	emitIntent();
-	m_Out << "\tset(${" << operandDest << "} ${" << valueName << "})\n";
-	emitIntent();
-	m_Out << "endif()\n";
+	m_Out << "_LLVM_CMAKE_STORE(" << getFunctionModifiedExternalVariableListName(m_CurrentFunction)
+	      << " ${" << operandDest << "} ${" << valueName << "})\n";
 }
