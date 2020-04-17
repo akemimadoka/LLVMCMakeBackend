@@ -64,4 +64,24 @@ extern "C"
 	{
 		return {};
 	}
+
+	int Func1(int arg)
+	{
+		return arg + 1;
+	}
+
+	int Func2(int arg)
+	{
+		return arg + 2;
+	}
+
+	int (*GetCallback(bool func1))(int)
+	{
+		return func1 ? Func1 : Func2;
+	}
+
+	int InvokeFunc(int (*callback)(int), int arg)
+	{
+		return callback(arg);
+	}
 }

@@ -72,6 +72,8 @@ namespace LLVMCMakeBackend
 
 		void visitBranchInst(llvm::BranchInst& I);
 
+		void visitPHINode(llvm::PHINode& I);
+
 	private:
 		llvm::raw_ostream& m_Out;
 		llvm::Function* m_CurrentFunction;
@@ -79,12 +81,16 @@ namespace LLVMCMakeBackend
 		std::unique_ptr<llvm::DataLayout> m_DataLayout;
 		std::unique_ptr<llvm::IntrinsicLowering> m_IntrinsicLowering;
 
+		void emitModuleInfo(llvm::Module& m);
+
 		void emitModulePrologue(llvm::Module& m);
 		void emitModuleEpilogue(llvm::Module& m);
 
 		bool lowerIntrinsics(llvm::Function& f);
 		void emitIntrinsics();
 		void visitIntrinsics(llvm::CallInst& call);
+
+		bool lowerPHINode(llvm::Function& f);
 
 		std::size_t m_CurrentIntent;
 		void emitIntent();
@@ -98,8 +104,9 @@ namespace LLVMCMakeBackend
 		std::string getTemporaryName(std::size_t id);
 		std::string allocateTemporaryName();
 		std::string getValueName(llvm::Value* v);
+		std::string getValuePhiName(llvm::Value* v);
 		std::string getFunctionReturnValueName(llvm::Function* f);
-		std::string getFunctionModifiedExternalVariableListName(llvm::Function* f);
+		std::string getFunctionModifiedExternalVariableListName(llvm::Function* f, bool isReturning = false);
 
 		std::unordered_map<llvm::Type*, std::string> m_TypeNameCache;
 		llvm::StringRef getTypeName(llvm::Type* type);

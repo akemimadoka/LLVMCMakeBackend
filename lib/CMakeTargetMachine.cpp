@@ -1,8 +1,8 @@
 #include "CMakeTargetMachine.h"
 #include "CMakeBackend.h"
 #include <llvm/CodeGen/TargetPassConfig.h>
-#include <llvm/Transforms/Utils.h>
 #include <llvm/Support/TargetRegistry.h>
+#include <llvm/Transforms/Utils.h>
 
 using namespace llvm;
 
@@ -41,7 +41,10 @@ bool LLVMCMakeBackend::CMakeTargetMachine::addPassesToEmitFile(
 		return true;
 	}
 
-	PM.add(new TargetPassConfig(*this, PM));
+	const auto reg = PassRegistry::getPassRegistry();
+
+	const auto passConfig = createPassConfig(PM);
+	PM.add(passConfig);
 	PM.add(new LLVMCMakeBackend::CMakeBackend(Out));
 
 	return false;
