@@ -13,3 +13,11 @@ message(STATUS "${Dest}")
 
 TestInner0()
 message(STATUS "${_LLVM_CMAKE_TestInner0_RETURN_VALUE}")
+
+GetCallback(0)
+InvokeFunc(${_LLVM_CMAKE_GetCallback_RETURN_VALUE} 1)
+message(STATUS "InvokeFunc returns ${_LLVM_CMAKE_InvokeFunc_RETURN_VALUE}")
+
+GetCallback(1)
+InvokeFunc(${_LLVM_CMAKE_GetCallback_RETURN_VALUE} 1)
+message(STATUS "InvokeFunc returns ${_LLVM_CMAKE_InvokeFunc_RETURN_VALUE}")

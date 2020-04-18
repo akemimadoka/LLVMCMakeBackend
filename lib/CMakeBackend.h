@@ -72,8 +72,6 @@ namespace LLVMCMakeBackend
 
 		void visitBranchInst(llvm::BranchInst& I);
 
-		void visitPHINode(llvm::PHINode& I);
-
 	private:
 		llvm::raw_ostream& m_Out;
 		llvm::Function* m_CurrentFunction;
@@ -104,7 +102,6 @@ namespace LLVMCMakeBackend
 		std::string getTemporaryName(std::size_t id);
 		std::string allocateTemporaryName();
 		std::string getValueName(llvm::Value* v);
-		std::string getValuePhiName(llvm::Value* v);
 		std::string getFunctionReturnValueName(llvm::Function* f);
 		std::string getFunctionModifiedExternalVariableListName(llvm::Function* f, bool isReturning = false);
 
@@ -128,15 +125,14 @@ namespace LLVMCMakeBackend
 
 		void emitBasicBlock(llvm::BasicBlock* bb);
 
-		void evalOperand(llvm::Value* v);
-		std::string evalOperand(llvm::Value* v, llvm::StringRef nameHint);
+		std::string evalOperand(llvm::Value* v, llvm::StringRef nameHint = "");
 		std::string evalConstant(llvm::Constant* con, llvm::StringRef nameHint = "");
 
 		void emitTypeLayout(llvm::Type* type);
 
 		void emitLoad(llvm::StringRef resultName, llvm::Value* src);
 		void emitStore(llvm::Value* value, llvm::Value* dest);
-		void emitStore(llvm::StringRef valueName, llvm::Value* dest);
+		void emitStore(llvm::StringRef valueExpr, llvm::Value* dest);
 	};
 } // namespace LLVMCMakeBackend
 
