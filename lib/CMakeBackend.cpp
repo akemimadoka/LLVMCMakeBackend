@@ -18,12 +18,13 @@ namespace
 	// fat-pointer = pointer-head, property-list, info-list
 	// pointer-head = "_LLVM_CMAKE_PTR"
 	// property-list = { ".", property }
-	// property = "GEP" | "EXT"
+	// property = "NUL" | "GEP" | "EXT"
 	// info-list = { ":", info }
 	// info = <any char except ":">
 
-	// 目前包含的属性有 GEP 表示 gep 而来的指针，以及 EXT 表示引用外部实体的指针
+	// 目前包含的属性有 NUL 表示空指针， GEP 表示 gep 而来的指针，以及 EXT 表示引用外部实体的指针
 	// info 按照 property 顺序排列
+	// 对于 NUL，没有 info
 	// 对于 GEP，info 有 2 个，按顺序为偏移和引用的实体名称
 	// 对于 EXT，若指针不为 GEP，info 有 1 个，是引用的实体的名称，否则仅作为标记，不包含 info
 
@@ -65,7 +66,9 @@ _LLVM_CMAKE_PROPAGATE_FUNCTION_RESULT(${_LLVM_CMAKE_INVOKE_FUNCTION_PTR_FUNC_PTR
 endfunction()
 
 function(_LLVM_CMAKE_CONSTRUCT_GEP _LLVM_CMAKE_CONSTRUCT_GEP_OFFSET _LLVM_CMAKE_CONSTRUCT_GEP_ENTITY_PTR _LLVM_CMAKE_CONSTRUCT_GEP_RESULT_NAME)
-	if(_LLVM_CMAKE_CONSTRUCT_GEP_ENTITY_PTR MATCHES "^_LLVM_CMAKE_PTR.*\\.GEP.*:([0-9]+):(.+)$")
+	if(_LLVM_CMAKE_CONSTRUCT_GEP_ENTITY_PTR MATCHES "^_LLVM_CMAKE_PTR.*\\.NUL.*$")
+		message(FATAL_ERROR "Trying to construct gep from a null pointer")
+	elseif(_LLVM_CMAKE_CONSTRUCT_GEP_ENTITY_PTR MATCHES "^_LLVM_CMAKE_PTR.*\\.GEP.*:([0-9]+):(.+)$")
 		set(_LLVM_CMAKE_CONSTRUCT_GEP_ORIGIN_OFFSET ${CMAKE_MATCH_1})
 		set(_LLVM_CMAKE_CONSTRUCT_GEP_REF_ENTITY ${CMAKE_MATCH_2})
 		math(EXPR _LLVM_CMAKE_CONSTRUCT_GEP_OFFSET "${_LLVM_CMAKE_CONSTRUCT_GEP_OFFSET} + ${_LLVM_CMAKE_CONSTRUCT_GEP_ORIGIN_OFFSET}")
@@ -80,7 +83,9 @@ function(_LLVM_CMAKE_CONSTRUCT_GEP _LLVM_CMAKE_CONSTRUCT_GEP_OFFSET _LLVM_CMAKE_
 endfunction()
 
 function(_LLVM_CMAKE_LOAD _LLVM_CMAKE_LOAD_PTR _LLVM_CMAKE_LOAD_RESULT_NAME)
-	if(_LLVM_CMAKE_LOAD_PTR MATCHES "^_LLVM_CMAKE_PTR.*\\.GEP.*:([0-9]+):(.+)$")
+	if(_LLVM_CMAKE_LOAD_PTR MATCHES "^_LLVM_CMAKE_PTR.*\\.NUL.*$")
+		message(FATAL_ERROR "Trying to dereference a null pointer")
+	elseif(_LLVM_CMAKE_LOAD_PTR MATCHES "^_LLVM_CMAKE_PTR.*\\.GEP.*:([0-9]+):(.+)$")
 		set(_LLVM_CMAKE_LOAD_OFFSET ${CMAKE_MATCH_1})
 		set(_LLVM_CMAKE_LOAD_REF_ENTITY ${CMAKE_MATCH_2})
 		list(GET ${_LLVM_CMAKE_LOAD_REF_ENTITY} ${_LLVM_CMAKE_LOAD_OFFSET} _LLVM_CMAKE_LOAD_RESULT)
@@ -94,7 +99,9 @@ function(_LLVM_CMAKE_LOAD _LLVM_CMAKE_LOAD_PTR _LLVM_CMAKE_LOAD_RESULT_NAME)
 endfunction()
 
 function(_LLVM_CMAKE_STORE _LLVM_CMAKE_STORE_FUNC_MODLIST _LLVM_CMAKE_STORE_PTR)
-	if(_LLVM_CMAKE_STORE_PTR MATCHES "^_LLVM_CMAKE_PTR.*\\.GEP.*:([0-9]+):(.+)$")
+	if(_LLVM_CMAKE_STORE_PTR MATCHES "^_LLVM_CMAKE_PTR.*\\.NUL.*$")
+		message(FATAL_ERROR "Trying to write to a null pointer")
+	elseif(_LLVM_CMAKE_STORE_PTR MATCHES "^_LLVM_CMAKE_PTR.*\\.GEP.*:([0-9]+):(.+)$")
 		set(_LLVM_CMAKE_STORE_OFFSET ${CMAKE_MATCH_1})
 		set(_LLVM_CMAKE_STORE_REF_ENTITY ${CMAKE_MATCH_2})
 		list(REMOVE_AT ${_LLVM_CMAKE_STORE_REF_ENTITY} ${_LLVM_CMAKE_STORE_OFFSET})
@@ -367,57 +374,7 @@ void CMakeBackend::visitInlineAsm(CallInst& I)
 
 void CMakeBackend::visitBinaryOperator(llvm::BinaryOperator& I)
 {
-	const auto name = getValueName(&I);
-
-	const auto operandLhs = evalOperand(I.getOperand(0));
-	const auto operandRhs = evalOperand(I.getOperand(1));
-
-	emitIntent();
-	m_Out << "math(EXPR " << name << " \"" << operandLhs << " ";
-
-	// TODO: 溢出处理
-	// NOTE: CMake 的 math 是将所有数作为 int64 处理的
-	switch (I.getOpcode())
-	{
-	default:
-		assert("Impossible");
-		std::terminate();
-	case Instruction::Add:
-		m_Out << "+";
-		break;
-	case Instruction::Sub:
-		m_Out << "-";
-		break;
-	case Instruction::Mul:
-		m_Out << "*";
-		break;
-	case Instruction::SDiv:
-	case Instruction::UDiv:
-		m_Out << "/";
-		break;
-	case Instruction::SRem:
-	case Instruction::URem:
-		m_Out << "%";
-		break;
-	case Instruction::Or:
-		m_Out << "|";
-		break;
-	case Instruction::And:
-		m_Out << "&";
-		break;
-	case Instruction::Xor:
-		m_Out << "^";
-		break;
-	case Instruction::Shl:
-		m_Out << "<<";
-		break;
-	case Instruction::LShr:
-	case Instruction::AShr:
-		m_Out << ">>";
-		break;
-	}
-
-	m_Out << " " << operandRhs << "\")\n";
+	emitBinaryExpr(I.getOpcode(), I.getOperand(0), I.getOperand(1), getValueName(&I));
 }
 
 void CMakeBackend::visitLoadInst(llvm::LoadInst& I)
@@ -445,9 +402,10 @@ void CMakeBackend::visitAllocaInst(llvm::AllocaInst& I)
 
 		emitIntent();
 		m_Out << "set(" << objectName << " \"";
+		const auto typeLayout = getTypeLayout(elemType);
 		for (std::size_t i = 0; i < size; ++i)
 		{
-			emitTypeLayout(elemType);
+			m_Out << typeLayout;
 		}
 		m_Out << "\")\n";
 
@@ -466,88 +424,7 @@ void CMakeBackend::visitAllocaInst(llvm::AllocaInst& I)
 
 void CMakeBackend::visitGetElementPtrInst(llvm::GetElementPtrInst& I)
 {
-	if (I.getNumOperands() == 0)
-	{
-		assert(!"Not implemented");
-		std::terminate();
-	}
-
-	const auto ptrOperand = I.getPointerOperand();
-	const auto ptrType = cast<PointerType>(ptrOperand->getType());
-	const auto ptrValue = evalOperand(ptrOperand);
-
-	std::size_t realIdx{};
-	// 系数及对应的变量名
-	std::vector<std::pair<std::size_t, std::string>> offsets;
-
-	auto pointeeType = ptrType->getElementType();
-	const auto opCount = I.getNumOperands();
-	for (std::size_t i = 2; i < opCount; ++i)
-	{
-		const auto idxOperand = I.getOperand(i);
-		if (const auto constIdx = dyn_cast<ConstantInt>(idxOperand))
-		{
-			const auto idxValue = constIdx->getValue().getZExtValue();
-			if (const auto arrayType = dyn_cast<ArrayType>(pointeeType))
-			{
-				const auto fieldSize = getTypeFieldCount(arrayType->getElementType());
-				realIdx += idxValue * fieldSize;
-				pointeeType = arrayType->getElementType();
-			}
-			else if (const auto structType = dyn_cast<StructType>(pointeeType))
-			{
-				for (std::size_t i = 0; i < idxValue; ++i)
-				{
-					const auto fieldType = structType->getElementType(i);
-					realIdx += getTypeFieldCount(fieldType);
-				}
-				pointeeType = structType->getElementType(idxValue);
-			}
-			else
-			{
-				assert(!"Unsupported type");
-				std::terminate();
-			}
-		}
-		else
-		{
-			// TODO: 当前仅支持数组的动态索引，是否需要支持结构体的动态索引？
-			if (const auto arrayType = dyn_cast<ArrayType>(pointeeType))
-			{
-				offsets.emplace_back(getTypeFieldCount(arrayType->getElementType()),
-				                     evalOperand(idxOperand));
-			}
-			else
-			{
-				assert(!"Not implemented");
-				std::terminate();
-			}
-		}
-	}
-
-	// 结果是指针
-
-	const auto offsetName = allocateTemporaryName();
-
-	if (offsets.empty())
-	{
-		emitIntent();
-		m_Out << "set(" << offsetName << " \"" << realIdx << "\")\n";
-	}
-	else
-	{
-		emitIntent();
-		m_Out << "math(EXPR " << offsetName << " \"" << realIdx;
-		for (const auto& [size, expr] : offsets)
-		{
-			m_Out << " + " << size << " * " << expr;
-		}
-		m_Out << "\")\n";
-	}
-
-	emitIntent();
-	m_Out << "_LLVM_CMAKE_CONSTRUCT_GEP(${" << offsetName << "} " << ptrValue << " "
-	      << getValueName(&I) << ")\n";
+	emitGetElementPtr(I.getPointerOperand(), gep_type_begin(I), gep_type_end(I), getValueName(&I));
 }
 
 void CMakeBackend::visitBranchInst(BranchInst& I)
@@ -608,7 +485,21 @@ void CMakeBackend::emitModulePrologue(llvm::Module& m)
 
 	for (auto& global : m.globals())
 	{
-		evalConstant(global.getInitializer(), global.getName());
+		if (!global.hasInitializer())
+		{
+			emitIntent();
+			m_Out << "set(" << global.getName() << " \"" << getTypeLayout(global.getValueType())
+			      << "\")\n";
+		}
+		else
+		{
+			const auto& [result, inlined] = evalConstant(global.getInitializer(), global.getName());
+			if (inlined)
+			{
+				emitIntent();
+				m_Out << "set(" << global.getName() << " \"" << result << "\")\n";
+			}
+		}
 	}
 
 	m_Out << "\n";
@@ -754,7 +645,9 @@ std::size_t CMakeBackend::allocateTemporaryID()
 
 std::string CMakeBackend::getTemporaryName(std::size_t id)
 {
-	return "_LLVM_CMAKE_TEMP_${_LLVM_CMAKE_CURRENT_DEPTH}_" + std::to_string(id);
+	return (m_CurrentFunction ? "_LLVM_CMAKE_TEMP_${_LLVM_CMAKE_CURRENT_DEPTH}_"
+	                          : "_LLVM_CMAKE_TEMP_GLOBAL_") +
+	       std::to_string(id);
 }
 
 std::string CMakeBackend::allocateTemporaryName()
@@ -804,35 +697,36 @@ llvm::StringRef CMakeBackend::getTypeName(llvm::Type* type)
 		}
 		else if (type->isVoidTy())
 		{
-			typeName = "void";
+			typeName = "Void";
 		}
 		else if (const auto intType = dyn_cast<IntegerType>(type))
 		{
 			switch (intType->getBitWidth())
 			{
 			case 1:
-				typeName = "bool";
+				typeName = "Bool";
 				break;
 			case 8:
-				typeName = "char";
-				break;
 			case 16:
 			case 32:
 			case 64:
 			case 128:
+			default:
 				typeName = "Interger";
 				break;
 			}
 		}
-		else if (type->isPointerTy())
+		else if (const auto ptrType = dyn_cast<PointerType>(type))
 		{
-			typeName = getTypeName(type->getPointerElementType());
-			typeName += "*";
+			const auto elemType = ptrType->getElementType();
+			typeName = "*";
+			typeName += getTypeName(elemType);
 		}
 		else if (type->isArrayTy())
 		{
-			typeName = getTypeName(type->getArrayElementType());
-			typeName += "[";
+			typeName = "[";
+			typeName += getTypeName(type->getArrayElementType());
+			typeName += "; ";
 			typeName += std::to_string(type->getArrayNumElements());
 			typeName += "]";
 		}
@@ -1057,167 +951,179 @@ void CMakeBackend::emitBasicBlock(BasicBlock* bb)
 
 std::string CMakeBackend::evalOperand(llvm::Value* v, llvm::StringRef nameHint)
 {
-	if (const auto con = dyn_cast<Constant>(v); con && !isa<GlobalValue>(con))
+	if (const auto con = dyn_cast<Constant>(v); con)
 	{
-		return "${" + evalConstant(con, nameHint) + "}";
+		return evalConstant(con, nameHint).first;
 	}
 	else
 	{
-		// 全局变量在 llvm 中始终以指针引用，故不需解引用
-		if (isa<GlobalValue>(v))
-		{
-			return getValueName(v);
-		}
-
 		// 是变量引用
 		return "${" + (nameHint.empty() ? getValueName(v) : static_cast<std::string>(nameHint)) + "}";
 	}
 }
 
-std::string CMakeBackend::evalConstant(llvm::Constant* con, llvm::StringRef nameHint)
+std::pair<std::string, bool> CMakeBackend::evalConstant(llvm::Constant* con,
+                                                        llvm::StringRef nameHint)
 {
+	// 全局变量在 llvm 中始终以指针引用，故不需解引用
+	if (isa<GlobalValue>(con))
+	{
+		if (isa<Function>(con))
+		{
+			return { getValueName(con), true };
+		}
+		return { "_LLVM_CMAKE_PTR.EXT:" + getValueName(con), true };
+	}
+
 	auto conName = nameHint.empty() ? getValueName(con) : static_cast<std::string>(nameHint);
 
 	if (const auto ce = dyn_cast<ConstantExpr>(con))
 	{
-		switch (ce->getOpcode())
+		const auto opCode = ce->getOpcode();
+		if (Instruction::isBinaryOp(opCode))
 		{
-		case Instruction::Add:
-		case Instruction::Sub:
-		case Instruction::Mul:
-		case Instruction::SDiv:
-		case Instruction::UDiv:
-		case Instruction::SRem:
-		case Instruction::URem:
-		case Instruction::Or:
-		case Instruction::And:
-		case Instruction::Xor:
-		case Instruction::Shl:
-		case Instruction::LShr:
-		case Instruction::AShr: {
-			visitBinaryOperator(*cast<llvm::BinaryOperator>(ce));
-			return conName;
+			emitBinaryExpr(static_cast<Instruction::BinaryOps>(opCode), ce->getOperand(0),
+			               ce->getOperand(1), conName);
+			return { conName, false };
 		}
 
-		default:
-			errs() << "Err!\n";
-			std::terminate();
+		if (opCode == Instruction::GetElementPtr)
+		{
+			emitGetElementPtr(ce->getOperand(0), gep_type_begin(ce), gep_type_end(ce), conName);
+			return { conName, false };
 		}
+
+		if (Instruction::isCast(opCode))
+		{
+			// TODO: 当前 cast 不进行任何操作
+			return evalConstant(ce->getOperand(0), conName);
+		}
+
+		errs() << "Unimplemented: " << *con << "\n";
+		std::terminate();
 	}
 
 	if (const auto i = dyn_cast<ConstantInt>(con))
 	{
-		emitIntent();
-		m_Out << "set(" << conName << " \"";
 		if (i->getBitWidth() == 1)
 		{
-			m_Out << (i->getValue().isNullValue() ? "False" : "True");
+			return { i->getValue().isNullValue() ? "False" : "True", true };
 		}
 		else
 		{
-			m_Out << i->getValue();
+			return { i->getValue().toString(10, true), true };
 		}
-		m_Out << "\")\n";
 	}
-	else if (const auto arr = dyn_cast<ConstantArray>(con))
+	else if (isa<ConstantPointerNull>(con))
 	{
-		emitIntent();
-		m_Out << "set(" << conName << " \"";
-		const auto elemType = cast<ArrayType>(arr->getType())->getElementType();
-		// if (elemType->isIntegerTy(8))
-		// {
-		// 	// 假设是字符串
-		// 	for (std::size_t i = 0; i < arr->getNumOperands(); ++i)
-		// 	{
-		// 		m_Out << static_cast<char>(
-		// 		    cast<ConstantInt>(arr->getOperand(i))->getValue().getZExtValue());
-		// 	}
-		// }
-		// else
-		if (elemType->isIntegerTy())
+		return { "_LLVM_CMAKE_PTR.NUL", true };
+	}
+	else if (const auto aggregate = dyn_cast<ConstantAggregate>(con))
+	{
+		std::vector<std::string> operands;
+		for (std::size_t i = 0; i < aggregate->getNumOperands(); ++i)
 		{
-			for (std::size_t i = 0; i < arr->getNumOperands(); ++i)
+			const auto op = aggregate->getOperand(i);
+			operands.emplace_back(
+			    evalConstant(aggregate->getOperand(i), getConstantFieldTempName(conName, i)).first);
+		}
+
+		std::string result;
+		if (!operands.empty())
+		{
+			result += operands.front();
+			for (auto iter = std::next(operands.begin()); iter != operands.end(); ++iter)
 			{
-				m_Out << cast<ConstantInt>(arr->getOperand(i))->getValue().getZExtValue();
-				if (i != arr->getNumOperands() - 1)
-				{
-					m_Out << ";";
-				}
+				result += ";";
+				result += *iter;
 			}
 		}
-		m_Out << "\")\n";
+
+		return { std::move(result), true };
 	}
 	else if (const auto seq = dyn_cast<ConstantDataSequential>(con))
 	{
-		emitIntent();
-		m_Out << "set(" << conName << " \"";
+		std::string result;
 		const auto elemType = cast<ArrayType>(seq->getType())->getElementType();
-		/*if (elemType->isIntegerTy(8))
-		{
-		  // 假设是字符串，去除结尾0
-		  for (std::size_t i = 0; i < seq->getNumElements() - 1; ++i)
-		  {
-		    m_Out << static_cast<char>(
-		        cast<ConstantInt>(seq->getElementAsConstant(i))->getValue().getZExtValue());
-		  }
-		}
-		else*/
 		if (elemType->isIntegerTy())
 		{
-			for (std::size_t i = 0; i < seq->getNumElements(); ++i)
+			if (seq->getNumElements())
 			{
-				m_Out << cast<ConstantInt>(seq->getElementAsConstant(i))->getValue().getZExtValue();
-				if (i != seq->getNumElements() - 1)
+				result += cast<ConstantInt>(seq->getElementAsConstant(0))->getValue().toString(10, true);
+				for (std::size_t i = 1; i < seq->getNumElements(); ++i)
 				{
-					m_Out << ";";
+					result += ";";
+					result += cast<ConstantInt>(seq->getElementAsConstant(i))->getValue().toString(10, true);
 				}
 			}
 		}
-		m_Out << "\")\n";
+		else
+		{
+			assert(!"Unimplemented");
+			std::terminate();
+		}
+
+		return { std::move(result), true };
 	}
 	else if (const auto zeroInitializer = dyn_cast<ConstantAggregateZero>(con))
 	{
-		emitIntent();
-		m_Out << "set(" << conName << " \"" << getTypeZeroInitializer(con->getType()) << "\")\n";
+		return std::pair<std::string, bool>{ getTypeZeroInitializer(con->getType()), true };
 	}
 	else
 	{
-		errs() << "Err!\n";
+		errs() << "Unimplemented: " << *con << "\n";
 		std::terminate();
 	}
 
-	return conName;
+	return { "${" + conName + "}", false };
 }
 
-void CMakeBackend::emitTypeLayout(llvm::Type* type)
+std::string CMakeBackend::getConstantFieldTempName(llvm::StringRef constantName, std::size_t index)
 {
-	if (const auto structType = dyn_cast<StructType>(type))
+	return ("_LLVM_CMAKE_" + constantName + "_FIELD_TEMP_" + std::to_string(index)).str();
+}
+
+llvm::StringRef CMakeBackend::getTypeLayout(llvm::Type* type)
+{
+	auto iter = m_TypeLayoutCache.find(type);
+	if (iter == m_TypeLayoutCache.end())
 	{
-		for (std::size_t i = 0; i < structType->getNumElements(); ++i)
+		std::string result;
+		if (const auto structType = dyn_cast<StructType>(type))
 		{
-			emitTypeLayout(structType->getElementType(i));
-			if (i != structType->getNumElements() - 1)
+			if (structType->getNumElements())
 			{
-				m_Out << ";";
+				result += getTypeLayout(structType->getElementType(0));
+				for (std::size_t i = 1; i < structType->getNumElements(); ++i)
+				{
+					result += ";";
+					result += getTypeLayout(structType->getElementType(i));
+				}
 			}
 		}
-	}
-	else if (const auto arrayType = dyn_cast<ArrayType>(type))
-	{
-		const auto elemType = arrayType->getElementType();
-		for (std::size_t i = 0; i < arrayType->getArrayNumElements(); ++i)
+		else if (const auto arrayType = dyn_cast<ArrayType>(type))
 		{
-			emitTypeLayout(elemType);
-			if (i != arrayType->getArrayNumElements() - 1)
+			if (arrayType->getNumElements())
 			{
-				m_Out << ";";
+				const auto elemType = arrayType->getElementType();
+				const auto elemTypeLayout = getTypeLayout(elemType);
+				result += elemTypeLayout;
+				for (std::size_t i = 1; i < arrayType->getNumElements(); ++i)
+				{
+					result += ";";
+					result += elemTypeLayout;
+				}
 			}
 		}
+		else
+		{
+			result = getTypeName(type);
+		}
+
+		std::tie(iter, std::ignore) = m_TypeLayoutCache.emplace(type, std::move(result));
 	}
-	else
-	{
-		m_Out << getTypeName(type);
-	}
+
+	return iter->second;
 }
 
 void CMakeBackend::emitLoad(llvm::StringRef resultName, llvm::Value* srcPtr)
@@ -1242,4 +1148,162 @@ void CMakeBackend::emitStore(llvm::StringRef valueExpr, llvm::Value* destPtr)
 	emitIntent();
 	m_Out << "_LLVM_CMAKE_STORE(" << getFunctionModifiedExternalVariableListName(m_CurrentFunction)
 	      << " " << operandDest << " " << valueExpr << ")\n";
+}
+
+void CMakeBackend::emitBinaryExpr(llvm::Instruction::BinaryOps opCode, llvm::Value* lhs,
+                                  llvm::Value* rhs, llvm::StringRef name)
+{
+	const auto operandLhs = evalOperand(lhs);
+	const auto operandRhs = evalOperand(rhs);
+
+	emitIntent();
+	m_Out << "math(EXPR " << name << " \"" << operandLhs << " ";
+
+	// TODO: 溢出处理
+	// NOTE: CMake 的 math 是将所有数作为 int64 处理的
+	switch (opCode)
+	{
+	default:
+		assert("Impossible");
+		std::terminate();
+	case Instruction::Add:
+		m_Out << "+";
+		break;
+	case Instruction::Sub:
+		m_Out << "-";
+		break;
+	case Instruction::Mul:
+		m_Out << "*";
+		break;
+	case Instruction::SDiv:
+	case Instruction::UDiv:
+		m_Out << "/";
+		break;
+	case Instruction::SRem:
+	case Instruction::URem:
+		m_Out << "%";
+		break;
+	case Instruction::Or:
+		m_Out << "|";
+		break;
+	case Instruction::And:
+		m_Out << "&";
+		break;
+	case Instruction::Xor:
+		m_Out << "^";
+		break;
+	case Instruction::Shl:
+		m_Out << "<<";
+		break;
+	case Instruction::LShr:
+	case Instruction::AShr:
+		m_Out << ">>";
+		break;
+	}
+
+	m_Out << " " << operandRhs << "\")\n";
+}
+
+void CMakeBackend::emitGetElementPtr(llvm::Value* ptrOperand, llvm::gep_type_iterator gepBegin,
+                                     llvm::gep_type_iterator gepEnd, llvm::StringRef name)
+{
+	if (gepBegin == gepEnd)
+	{
+		assert(!"Not implemented");
+		std::terminate();
+	}
+
+	const auto ptrType = cast<PointerType>(ptrOperand->getType());
+	const auto ptrValue = evalOperand(ptrOperand);
+
+	std::size_t realIdx{};
+	// 系数及对应的变量名
+	std::vector<std::pair<std::size_t, std::string>> offsets;
+
+	const auto firstIdx = (gepBegin++).getOperand();
+	if (const auto constIdx = dyn_cast<ConstantInt>(firstIdx))
+	{
+		if (!constIdx->getValue().isNullValue())
+		{
+			assert(!"Not implemented");
+			std::terminate();
+		}
+	}
+
+	auto pointeeType = ptrType->getElementType();
+	for (auto iter = gepBegin; iter != gepEnd; ++iter)
+	{
+		const auto idxOperand = iter.getOperand();
+		if (const auto constIdx = dyn_cast<ConstantInt>(idxOperand))
+		{
+			const auto idxValue = constIdx->getValue().getZExtValue();
+			if (const auto arrayType = dyn_cast<ArrayType>(pointeeType))
+			{
+				const auto fieldSize = getTypeFieldCount(arrayType->getElementType());
+				realIdx += idxValue * fieldSize;
+				pointeeType = arrayType->getElementType();
+			}
+			else if (const auto structType = dyn_cast<StructType>(pointeeType))
+			{
+				for (std::size_t i = 0; i < idxValue; ++i)
+				{
+					const auto fieldType = structType->getElementType(i);
+					realIdx += getTypeFieldCount(fieldType);
+				}
+				pointeeType = structType->getElementType(idxValue);
+			}
+			else if (const auto ptrType = dyn_cast<PointerType>(pointeeType))
+			{
+				const auto fieldSize = getTypeFieldCount(ptrType->getElementType());
+				realIdx += idxValue * fieldSize;
+				pointeeType = ptrType->getElementType();
+			}
+			else
+			{
+				assert(!"Unsupported type");
+				std::terminate();
+			}
+		}
+		else
+		{
+			// TODO: 当前仅支持数组及指针的动态索引，是否需要支持结构体的动态索引？
+			if (const auto arrayType = dyn_cast<ArrayType>(pointeeType))
+			{
+				offsets.emplace_back(getTypeFieldCount(arrayType->getElementType()),
+				                     evalOperand(idxOperand));
+			}
+			else if (const auto ptrType = dyn_cast<PointerType>(pointeeType))
+			{
+				offsets.emplace_back(getTypeFieldCount(ptrType->getElementType()), evalOperand(idxOperand));
+			}
+			else
+			{
+				assert(!"Not implemented");
+				std::terminate();
+			}
+		}
+	}
+
+	// 结果是指针
+
+	const auto offsetName = allocateTemporaryName();
+
+	if (offsets.empty())
+	{
+		emitIntent();
+		m_Out << "set(" << offsetName << " \"" << realIdx << "\")\n";
+	}
+	else
+	{
+		emitIntent();
+		m_Out << "math(EXPR " << offsetName << " \"" << realIdx;
+		for (const auto& [size, expr] : offsets)
+		{
+			m_Out << " + " << size << " * " << expr;
+		}
+		m_Out << "\")\n";
+	}
+
+	emitIntent();
+	m_Out << "_LLVM_CMAKE_CONSTRUCT_GEP(${" << offsetName << "} " << ptrValue << " " << name << ")\n";
 }

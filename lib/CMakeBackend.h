@@ -36,7 +36,8 @@ namespace LLVMCMakeBackend
 	{
 		inline static char ID;
 
-		static constexpr unsigned ImplementedIntrinsics[]{ llvm::Intrinsic::memcpy, llvm::Intrinsic::memset };
+		static constexpr unsigned ImplementedIntrinsics[]{ llvm::Intrinsic::memcpy,
+			                                                 llvm::Intrinsic::memset };
 
 	public:
 		explicit CMakeBackend(llvm::raw_ostream& outStream)
@@ -103,7 +104,8 @@ namespace LLVMCMakeBackend
 		std::string allocateTemporaryName();
 		std::string getValueName(llvm::Value* v);
 		std::string getFunctionReturnValueName(llvm::Function* f);
-		std::string getFunctionModifiedExternalVariableListName(llvm::Function* f, bool isReturning = false);
+		std::string getFunctionModifiedExternalVariableListName(llvm::Function* f,
+		                                                        bool isReturning = false);
 
 		std::unordered_map<llvm::Type*, std::string> m_TypeNameCache;
 		llvm::StringRef getTypeName(llvm::Type* type);
@@ -126,13 +128,22 @@ namespace LLVMCMakeBackend
 		void emitBasicBlock(llvm::BasicBlock* bb);
 
 		std::string evalOperand(llvm::Value* v, llvm::StringRef nameHint = "");
-		std::string evalConstant(llvm::Constant* con, llvm::StringRef nameHint = "");
+		// 返回值：结果，是否内联
+		std::pair<std::string, bool> evalConstant(llvm::Constant* con, llvm::StringRef nameHint = "");
 
-		void emitTypeLayout(llvm::Type* type);
+		std::string getConstantFieldTempName(llvm::StringRef constantName, std::size_t index);
+
+		std::unordered_map<llvm::Type*, std::string> m_TypeLayoutCache;
+		llvm::StringRef getTypeLayout(llvm::Type* type);
 
 		void emitLoad(llvm::StringRef resultName, llvm::Value* src);
 		void emitStore(llvm::Value* value, llvm::Value* dest);
 		void emitStore(llvm::StringRef valueExpr, llvm::Value* dest);
+
+		void emitBinaryExpr(llvm::Instruction::BinaryOps opCode, llvm::Value* lhs, llvm::Value* rhs,
+		                    llvm::StringRef name);
+		void emitGetElementPtr(llvm::Value* ptrOperand, llvm::gep_type_iterator gepBegin,
+		                       llvm::gep_type_iterator gepEnd, llvm::StringRef name);
 	};
 } // namespace LLVMCMakeBackend
 

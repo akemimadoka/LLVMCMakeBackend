@@ -1,5 +1,7 @@
 extern "C"
 {
+	int* Ptr = nullptr;
+
 	int Load(int* ptr)
 	{
 		return *ptr;
