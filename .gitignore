@@ -2,3 +2,4 @@
 build
 testcase/*.cmake
 testcase/TestCpp.ll
+testcase/VirtualTest.ll

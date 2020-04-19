@@ -36,7 +36,7 @@ namespace
 set(_LLVM_CMAKE_CURRENT_DEPTH "0")
 
 function(_LLVM_CMAKE_EVAL)
-	cmake_parse_arguments(ARGUMENT "NO_LOCK" "CONTENT;PATH" "" ${ARGN})
+	cmake_parse_arguments(ARGUMENT "NO_LOCK" "" "PATH;CONTENT" ${ARGN})
 	if(NOT DEFINED ARGUMENT_CONTENT)
 		message(FATAL_ERROR "No content provided")
 	endif()

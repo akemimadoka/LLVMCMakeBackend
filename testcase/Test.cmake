@@ -33,3 +33,17 @@ message(STATUS "InvokeFunc returns ${_LLVM_CMAKE_InvokeFunc_RETURN_VALUE}")
 GetCallback(1)
 InvokeFunc(${_LLVM_CMAKE_GetCallback_RETURN_VALUE} 1)
 message(STATUS "InvokeFunc returns ${_LLVM_CMAKE_InvokeFunc_RETURN_VALUE}")
+
+include(${CMAKE_CURRENT_LIST_DIR}/VirtualTest.ll.cmake)
+
+set(Obj "")
+CreateVirtualBase(_LLVM_CMAKE_PTR.EXT:Obj)
+message(STATUS "CreateVirtualBase: ${Obj}")
+InvokeFunc(_LLVM_CMAKE_PTR.EXT:Obj 1)
+message(STATUS "InvokeFunc: ${_LLVM_CMAKE_InvokeFunc_RETURN_VALUE}")
+
+set(Obj "")
+CreateDerived(_LLVM_CMAKE_PTR.EXT:Obj)
+message(STATUS "CreateDerived: ${Obj}")
+InvokeFunc(_LLVM_CMAKE_PTR.EXT:Obj 1)
+message(STATUS "InvokeFunc: ${_LLVM_CMAKE_InvokeFunc_RETURN_VALUE}")
