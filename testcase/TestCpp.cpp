@@ -1,10 +1,26 @@
 extern "C"
 {
 	int* Ptr = nullptr;
+	int Array[] = { 1, 2, 3, 4 };
 
 	int Load(int* ptr)
 	{
 		return *ptr;
+	}
+
+	int* GetElem(int idx)
+	{
+		return Array + idx;
+	}
+
+	int LoadOffset(int* ptr, int offset)
+	{
+		return ptr[offset];
+	}
+
+	int GetOffset(int* from, int* to)
+	{
+		return to - from;
 	}
 
 	struct Pair

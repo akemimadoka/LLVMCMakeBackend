@@ -148,6 +148,56 @@ function(_LLVM_CMAKE_BYTEARRAY_TO_STRING _LLVM_CMAKE_BYTEARRAY_TO_STRING_STR_NAM
 	set(${_LLVM_CMAKE_BYTEARRAY_TO_STRING_STR_NAME} ${${_LLVM_CMAKE_BYTEARRAY_TO_STRING_STR_NAME}} PARENT_SCOPE)
 endfunction()
 
+function(_LLVM_CMAKE_POINTER_APPLY_OFFSET _LLVM_CMAKE_POINTER_APPLY_OFFSET_PTR _LLVM_CMAKE_POINTER_APPLY_OFFSET_OFFSET _LLVM_CMAKE_POINTER_APPLY_OFFSET_RESULT)
+	if(_LLVM_CMAKE_POINTER_APPLY_OFFSET_PTR MATCHES "^_LLVM_CMAKE_PTR(.*\\.GEP.*):([0-9]+):(.+)$")
+		set(_LLVM_CMAKE_POINTER_APPLY_OFFSET_PTR_OFFSET ${CMAKE_MATCH_2})
+		set(_LLVM_CMAKE_POINTER_APPLY_OFFSET_REF_ENTITY ${CMAKE_MATCH_3})
+		math(EXPR _LLVM_CMAKE_POINTER_APPLY_OFFSET_PTR_OFFSET
+			"${_LLVM_CMAKE_POINTER_APPLY_OFFSET_PTR_OFFSET} + ${_LLVM_CMAKE_POINTER_APPLY_OFFSET_OFFSET}")
+		set(${_LLVM_CMAKE_POINTER_APPLY_OFFSET_RESULT}
+			"_LLVM_CMAKE_PTR${CMAKE_MATCH_1}:${_LLVM_CMAKE_POINTER_APPLY_OFFSET_PTR_OFFSET}:${_LLVM_CMAKE_POINTER_APPLY_OFFSET_REF_ENTITY}"
+			PARENT_SCOPE)
+	else()
+		message(FATAL_ERROR "Pointer should be a gep pointer")
+	endif()
+endfunction()
+
+function(_LLVM_CMAKE_POINTER_OFFSET _LLVM_CMAKE_POINTER_OFFSET_TO _LLVM_CMAKE_POINTER_OFFSET_FROM _LLVM_CMAKE_POINTER_OFFSET_RESULT)
+	if(_LLVM_CMAKE_POINTER_OFFSET_TO MATCHES "^_LLVM_CMAKE_PTR.*\\.GEP.*:([0-9]+):(.+)$")
+		set(_LLVM_CMAKE_POINTER_OFFSET_TO_OFFSET ${CMAKE_MATCH_1})
+		set(_LLVM_CMAKE_POINTER_OFFSET_TO_REF_ENTITY ${CMAKE_MATCH_2})
+		if(_LLVM_CMAKE_POINTER_OFFSET_FROM MATCHES "^_LLVM_CMAKE_PTR.*\\.GEP.*:([0-9]+):(.+)$")
+			set(_LLVM_CMAKE_POINTER_OFFSET_FROM_OFFSET ${CMAKE_MATCH_1})
+			set(_LLVM_CMAKE_POINTER_OFFSET_FROM_REF_ENTITY ${CMAKE_MATCH_2})
+
+			if(NOT _LLVM_CMAKE_POINTER_OFFSET_TO_REF_ENTITY STREQUAL _LLVM_CMAKE_POINTER_OFFSET_FROM_REF_ENTITY)
+				message(FATAL_ERROR "From and to should reference to same object")
+			endif()
+
+			math(EXPR ${_LLVM_CMAKE_POINTER_OFFSET_RESULT}
+				"${_LLVM_CMAKE_POINTER_OFFSET_TO_OFFSET} - ${_LLVM_CMAKE_POINTER_OFFSET_FROM_OFFSET}")
+			set(${_LLVM_CMAKE_POINTER_OFFSET_RESULT} ${${_LLVM_CMAKE_POINTER_OFFSET_RESULT}} PARENT_SCOPE)
+			return()
+		endif()
+	endif()
+	message(FATAL_ERROR "From and to should be a gep pointer")
+endfunction()
+
+function(_LLVM_CMAKE_EXTRACT_POINTER_OFFSET _LLVM_CMAKE_EXTRACT_POINTER_OFFSET_PTR _LLVM_CMAKE_EXTRACT_POINTER_OFFSET_RESULT)
+	if(_LLVM_CMAKE_EXTRACT_POINTER_OFFSET_PTR MATCHES "^_LLVM_CMAKE_PTR.*\\.GEP.*:([0-9]+):.+$")
+		set(_LLVM_CMAKE_EXTRACT_POINTER_OFFSET_PTR_OFFSET ${CMAKE_MATCH_1})
+		set(${_LLVM_CMAKE_EXTRACT_POINTER_OFFSET_RESULT} ${_LLVM_CMAKE_EXTRACT_POINTER_OFFSET_PTR_OFFSET} PARENT_SCOPE)
+	else()
+		message(FATAL_ERROR "Pointer is not a gep pointer")
+	endif()
+endfunction()
+
+function(_LLVM_CMAKE_POINTER_TO_INT _LLVM_CMAKE_POINTER_TO_INT_PTR _LLVM_CMAKE_POINTER_TO_INT_PTR_SIZE _LLVM_CMAKE_POINTER_TO_INT_RESULT)
+	_LLVM_CMAKE_EXTRACT_POINTER_OFFSET(${_LLVM_CMAKE_POINTER_TO_INT_PTR} _LLVM_CMAKE_EXTRACT_POINTER_OFFSET_RESULT_VALUE)
+	math(EXPR _LLVM_CMAKE_EXTRACT_POINTER_OFFSET_RESULT_VALUE "${_LLVM_CMAKE_EXTRACT_POINTER_OFFSET_RESULT_VALUE} * ${_LLVM_CMAKE_POINTER_TO_INT_PTR_SIZE}")
+	set(${_LLVM_CMAKE_POINTER_TO_INT_RESULT} ${_LLVM_CMAKE_EXTRACT_POINTER_OFFSET_RESULT_VALUE} PARENT_SCOPE)
+endfunction()
+
 # End of LLVM CMake intrinsics
 
 )CMakeIntrinsics";
@@ -218,11 +268,22 @@ void CMakeBackend::visitCastInst(CastInst& I)
 		const auto operand = evalOperand(src);
 		emitIntent();
 		m_Out << "set(" << resultName << " " << operand << ")\n";
-		return;
 	}
+	else if (srcType->isPointerTy() && dstType->isIntegerTy())
+	{
+		const auto operand = evalOperand(src);
+		const auto srcElemType = srcType->getPointerElementType();
 
-	assert(!"Unimplemented");
-	std::terminate();
+		emitIntent();
+		m_Out << "_LLVM_CMAKE_POINTER_TO_INT(" << operand << " "
+		      << (srcElemType->getScalarSizeInBits() / 8) << " " << resultName << ")\n";
+	}
+	else
+	{
+		errs() << I << "\n";
+		assert(!"Unimplemented");
+		std::terminate();
+	}
 }
 
 void CMakeBackend::visitReturnInst(ReturnInst& i)
@@ -984,13 +1045,13 @@ std::pair<std::string, bool> CMakeBackend::evalConstant(llvm::Constant* con,
 		{
 			emitBinaryExpr(static_cast<Instruction::BinaryOps>(opCode), ce->getOperand(0),
 			               ce->getOperand(1), conName);
-			return { conName, false };
+			return { "${" + conName + "}", false };
 		}
 
 		if (opCode == Instruction::GetElementPtr)
 		{
 			emitGetElementPtr(ce->getOperand(0), gep_type_begin(ce), gep_type_end(ce), conName);
-			return { conName, false };
+			return { "${" + conName + "}", false };
 		}
 
 		if (Instruction::isCast(opCode))
@@ -1153,6 +1214,12 @@ void CMakeBackend::emitStore(llvm::StringRef valueExpr, llvm::Value* destPtr)
 void CMakeBackend::emitBinaryExpr(llvm::Instruction::BinaryOps opCode, llvm::Value* lhs,
                                   llvm::Value* rhs, llvm::StringRef name)
 {
+	if (lhs->getType()->isPointerTy() || rhs->getType()->isPointerTy())
+	{
+		emitPointerArithmetic(opCode, lhs, rhs, name);
+		return;
+	}
+
 	const auto operandLhs = evalOperand(lhs);
 	const auto operandRhs = evalOperand(rhs);
 
@@ -1204,6 +1271,47 @@ void CMakeBackend::emitBinaryExpr(llvm::Instruction::BinaryOps opCode, llvm::Val
 	m_Out << " " << operandRhs << "\")\n";
 }
 
+void CMakeBackend::emitPointerArithmetic(llvm::Instruction::BinaryOps opCode, llvm::Value* lhs,
+                                         llvm::Value* rhs, llvm::StringRef name)
+{
+	if (opCode != Instruction::Add && opCode != Instruction::Sub)
+	{
+		errs() << "Error";
+		std::terminate();
+	}
+
+	const auto operandLhs = evalOperand(lhs);
+	const auto operandRhs = evalOperand(rhs);
+
+	if (lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy())
+	{
+		if (opCode != Instruction::Sub)
+		{
+			errs() << "Error";
+			std::terminate();
+		}
+
+		emitIntent();
+		m_Out << "_LLVM_CMAKE_POINTER_OFFSET(" << operandLhs << " " << operandRhs << " " << name
+		      << ")\n";
+	}
+	else
+	{
+		const auto& [ptrOp, ptrValue, offsetOp, offsetValue] =
+		    lhs->getType()->isPointerTy() ? std::tuple{ lhs, operandLhs, rhs, operandRhs }
+		                                  : std::tuple{ rhs, operandRhs, lhs, operandLhs };
+		if (!offsetOp->getType()->isIntegerTy())
+		{
+			errs() << "Error type for offset: " << *offsetOp->getType() << "\n";
+			std::terminate();
+		}
+
+		emitIntent();
+		m_Out << "_LLVM_CMAKE_POINTER_APPLY_OFFSET(" << ptrValue
+		      << (opCode == Instruction::Add ? " " : " -") << offsetValue << " " << name << ")\n";
+	}
+}
+
 void CMakeBackend::emitGetElementPtr(llvm::Value* ptrOperand, llvm::gep_type_iterator gepBegin,
                                      llvm::gep_type_iterator gepEnd, llvm::StringRef name)
 {
@@ -1213,23 +1321,26 @@ void CMakeBackend::emitGetElementPtr(llvm::Value* ptrOperand, llvm::gep_type_ite
 		std::terminate();
 	}
 
-	const auto ptrType = cast<PointerType>(ptrOperand->getType());
-	const auto ptrValue = evalOperand(ptrOperand);
-
 	std::size_t realIdx{};
-	// 系数及对应的变量名
+	// 系数及对应的表达式
 	std::vector<std::pair<std::size_t, std::string>> offsets;
 
-	const auto firstIdx = (gepBegin++).getOperand();
-	if (const auto constIdx = dyn_cast<ConstantInt>(firstIdx))
-	{
-		if (!constIdx->getValue().isNullValue())
+	const auto ptrValue = [&] {
+		const auto firstIdx = (gepBegin++).getOperand();
+		if (const auto constIdx = dyn_cast<ConstantInt>(firstIdx);
+		    !constIdx || !constIdx->getValue().isNullValue())
 		{
-			assert(!"Not implemented");
-			std::terminate();
+			const auto resultPtrName = allocateTemporaryName();
+			emitPointerArithmetic(Instruction::Add, ptrOperand, firstIdx, resultPtrName);
+			return "${" + resultPtrName + "}";
 		}
-	}
+		else
+		{
+			return evalOperand(ptrOperand);
+		}
+	}();
 
+	const auto ptrType = cast<PointerType>(ptrOperand->getType());
 	auto pointeeType = ptrType->getElementType();
 	for (auto iter = gepBegin; iter != gepEnd; ++iter)
 	{

@@ -142,6 +142,8 @@ namespace LLVMCMakeBackend
 
 		void emitBinaryExpr(llvm::Instruction::BinaryOps opCode, llvm::Value* lhs, llvm::Value* rhs,
 		                    llvm::StringRef name);
+		void emitPointerArithmetic(llvm::Instruction::BinaryOps opCode, llvm::Value* lhs,
+		                           llvm::Value* rhs, llvm::StringRef name);
 		void emitGetElementPtr(llvm::Value* ptrOperand, llvm::gep_type_iterator gepBegin,
 		                       llvm::gep_type_iterator gepEnd, llvm::StringRef name);
 	};
