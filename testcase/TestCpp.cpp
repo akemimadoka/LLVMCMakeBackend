@@ -102,4 +102,20 @@ extern "C"
 	{
 		return callback(arg);
 	}
+
+	void AsmTest(int arg)
+	{
+		__asm__("message(STATUS \"Hello\")");
+	}
+
+	// int LoopTest(int count)
+	// {
+	// 	int result{};
+	// 	for (auto i = 0; i < count; ++i)
+	// 	{
+	// 		result += count;
+	// 	}
+
+	// 	return result;
+	// }
 }

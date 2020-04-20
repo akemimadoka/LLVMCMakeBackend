@@ -201,6 +201,19 @@ endfunction()
 # End of LLVM CMake intrinsics
 
 )CMakeIntrinsics";
+
+	void NormalizeIdentifier(std::string& identifier)
+	{
+		std::replace(identifier.begin(), identifier.end(), '$', '_');
+		std::replace(identifier.begin(), identifier.end(), '.', '_');
+	}
+
+	std::string NormalizeIdentifier(StringRef identifier)
+	{
+		std::string id{ identifier };
+		NormalizeIdentifier(id);
+		return id;
+	}
 } // namespace
 
 bool CMakeBackend::doInitialization(Module& M)
@@ -226,12 +239,14 @@ bool CMakeBackend::doFinalization(Module& M)
 bool CMakeBackend::runOnFunction(Function& F)
 {
 	m_CurrentFunction = &F;
+	m_CurrentLoopInfo = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
 	m_CurrentIntent = 0;
 	m_CurrentTemporaryID = 0;
 	m_TemporaryID.clear();
 	m_CurrentFunctionLocalEntityNames.clear();
 
 	auto modified = lowerIntrinsics(F);
+	// 不能依赖 PHIElimination，只好自己实现
 	modified |= lowerPHINode(F);
 #ifndef NDEBUG
 	if (modified)
@@ -243,6 +258,12 @@ bool CMakeBackend::runOnFunction(Function& F)
 	emitFunction(F);
 
 	return modified;
+}
+
+void CMakeBackend::getAnalysisUsage(llvm::AnalysisUsage& au) const
+{
+	au.addRequired<LoopInfoWrapperPass>();
+	au.setPreservesCFG();
 }
 
 void CMakeBackend::visitInstruction(Instruction& I)
@@ -262,21 +283,51 @@ void CMakeBackend::visitCastInst(CastInst& I)
 	const auto resultName = getValueName(&I);
 
 	// TODO: 当前未实现转换，仅允许值不实际发生变化的情况
-	if (srcType == dstType || (srcType->isPointerTy() && dstType->isPointerTy()) ||
-	    (srcType->isIntegerTy() && dstType->isIntegerTy()))
+	if (srcType == dstType || (srcType->isIntegerTy() && dstType->isIntegerTy()))
 	{
 		const auto operand = evalOperand(src);
 		emitIntent();
 		m_Out << "set(" << resultName << " " << operand << ")\n";
 	}
-	else if (srcType->isPointerTy() && dstType->isIntegerTy())
+	else if (const auto srcPtrType = dyn_cast<PointerType>(srcType))
 	{
-		const auto operand = evalOperand(src);
-		const auto srcElemType = srcType->getPointerElementType();
+		if (dstType->isIntegerTy())
+		{
+			const auto operand = evalOperand(src);
+			const auto srcElemType = srcType->getPointerElementType();
 
-		emitIntent();
-		m_Out << "_LLVM_CMAKE_POINTER_TO_INT(" << operand << " "
-		      << (srcElemType->getScalarSizeInBits() / 8) << " " << resultName << ")\n";
+			emitIntent();
+			m_Out << "_LLVM_CMAKE_POINTER_TO_INT(" << operand << " "
+			      << (getTypeSizeInBits(srcElemType) / 8) << " " << resultName << ")\n";
+		}
+		else if (const auto dstPtrType = dyn_cast<PointerType>(dstType))
+		{
+			const auto srcElemType = srcPtrType->getElementType();
+			const auto dstElemType = dstPtrType->getElementType();
+
+			if (const auto srcElemArrayType = dyn_cast<ArrayType>(srcElemType);
+			    srcElemArrayType &&
+			    getTypeSizeInBits(srcElemArrayType->getElementType()) == getTypeSizeInBits(dstElemType))
+			{
+				// 可能是数组退化
+				const auto operand = evalOperand(src);
+				emitIntent();
+				m_Out << "_LLVM_CMAKE_CONSTRUCT_GEP(0 " << operand << " " << resultName << ")\n";
+			}
+			else
+			{
+				if (getTypeSizeInBits(srcElemType) != getTypeSizeInBits(dstElemType))
+				{
+					errs() << I << "\n";
+					errs() << "Warning: incompatible pointers casting may be unsafe.\n";
+				}
+
+				// 指针 reinterpret_cast
+				const auto operand = evalOperand(src);
+				emitIntent();
+				m_Out << "set(" << resultName << " " << operand << ")\n";
+			}
+		}
 	}
 	else
 	{
@@ -376,7 +427,7 @@ void CMakeBackend::visitCallInst(CallInst& I)
 		returnType = func->getReturnType();
 		returnValueName = getFunctionReturnValueName(func);
 		returnModifiedListName = getFunctionModifiedExternalVariableListName(func, true);
-		m_Out << func->getName() << "(";
+		m_Out << NormalizeIdentifier(func->getName()) << "(";
 	}
 	else
 	{
@@ -488,6 +539,88 @@ void CMakeBackend::visitGetElementPtrInst(llvm::GetElementPtrInst& I)
 	emitGetElementPtr(I.getPointerOperand(), gep_type_begin(I), gep_type_end(I), getValueName(&I));
 }
 
+// TODO: 代码重复
+void CMakeBackend::visitExtractValueInst(llvm::ExtractValueInst& I)
+{
+	// 不是指针
+	const auto aggregate = I.getAggregateOperand();
+	const auto aggregateValue = evalOperand(aggregate);
+
+	std::size_t realIdx{};
+	auto type = aggregate->getType();
+	for (const auto idx : I.indices())
+	{
+		if (const auto arrType = dyn_cast<ArrayType>(type))
+		{
+			const auto elemType = arrType->getElementType();
+			realIdx += getTypeFieldCount(elemType) * idx;
+			type = elemType;
+		}
+		else if (const auto structType = dyn_cast<StructType>(type))
+		{
+			for (std::size_t i = 0; i < idx; ++i)
+			{
+				realIdx += getTypeFieldCount(structType->getElementType(i));
+			}
+			type = structType->getElementType(idx);
+		}
+		else
+		{
+			assert(!"Unimplemented");
+			std::terminate();
+		}
+	}
+
+	emitIntent();
+	const auto aggregateTmpValue = allocateTemporaryName();
+	m_Out << "set(" << aggregateTmpValue << " " << aggregateValue << ")\n";
+	emitIntent();
+	m_Out << "list(GET " << aggregateTmpValue << " " << realIdx << " " << getValueName(&I) << ")\n";
+}
+
+void CMakeBackend::visitInsertValueInst(llvm::InsertValueInst& I)
+{
+	// 不是指针
+	const auto aggregate = I.getAggregateOperand();
+	const auto aggregateValue = evalOperand(aggregate);
+
+	const auto value = I.getInsertedValueOperand();
+	const auto valueValue = evalOperand(value);
+
+	std::size_t realIdx{};
+	auto type = aggregate->getType();
+	for (const auto idx : I.indices())
+	{
+		if (const auto arrType = dyn_cast<ArrayType>(type))
+		{
+			const auto elemType = arrType->getElementType();
+			realIdx += getTypeFieldCount(elemType) * idx;
+			type = elemType;
+		}
+		else if (const auto structType = dyn_cast<StructType>(type))
+		{
+			for (std::size_t i = 0; i < idx; ++i)
+			{
+				realIdx += getTypeFieldCount(structType->getElementType(i));
+			}
+			type = structType->getElementType(idx);
+		}
+		else
+		{
+			assert(!"Unimplemented");
+			std::terminate();
+		}
+	}
+
+	const auto valueName = getValueName(&I);
+	emitIntent();
+	m_Out << "set(" << valueName << " " << aggregateValue << ")\n";
+	emitIntent();
+	m_Out << "list(REMOVE_AT " << valueName << " " << realIdx << ")\n";
+	emitIntent();
+	m_Out << "list(INSERT " << valueName << " " << realIdx << " " << valueValue << ")\n";
+}
+
 void CMakeBackend::visitBranchInst(BranchInst& I)
 {
 	if (I.isConditional())
@@ -546,19 +679,19 @@ void CMakeBackend::emitModulePrologue(llvm::Module& m)
 
 	for (auto& global : m.globals())
 	{
+		const auto name = NormalizeIdentifier(global.getName());
 		if (!global.hasInitializer())
 		{
 			emitIntent();
-			m_Out << "set(" << global.getName() << " \"" << getTypeLayout(global.getValueType())
-			      << "\")\n";
+			m_Out << "set(" << name << " \"" << getTypeLayout(global.getValueType()) << "\")\n";
 		}
 		else
 		{
-			const auto& [result, inlined] = evalConstant(global.getInitializer(), global.getName());
+			const auto& [result, inlined] = evalConstant(global.getInitializer(), name);
 			if (inlined)
 			{
 				emitIntent();
-				m_Out << "set(" << global.getName() << " \"" << result << "\")\n";
+				m_Out << "set(" << name << " \"" << result << "\")\n";
 			}
 		}
 	}
@@ -668,7 +801,8 @@ bool CMakeBackend::lowerPHINode(llvm::Function& f)
 				}
 
 				IRBuilder<> replaceBuilder{ phiNode->getParent(), phiNode->getIterator() };
-				const auto load = replaceBuilder.CreateLoad(phiCopy, phiNode->getName());
+				const auto load =
+				    replaceBuilder.CreateLoad(phiCopy, NormalizeIdentifier(phiNode->getName()));
 				phiNode->replaceAllUsesWith(load);
 				phiNode->eraseFromParent();
 
@@ -722,10 +856,10 @@ std::string CMakeBackend::getValueName(llvm::Value* v)
 	{
 		if (dyn_cast<GlobalValue>(v))
 		{
-			return static_cast<std::string>(v->getName());
+			return NormalizeIdentifier(v->getName());
 		}
 
-		return "_LLVM_CMAKE_${_LLVM_CMAKE_CURRENT_DEPTH}_" + static_cast<std::string>(v->getName());
+		return "_LLVM_CMAKE_${_LLVM_CMAKE_CURRENT_DEPTH}_" + NormalizeIdentifier(v->getName());
 	}
 
 	return getTemporaryName(getTemporaryID(v));
@@ -773,7 +907,7 @@ llvm::StringRef CMakeBackend::getTypeName(llvm::Type* type)
 			case 64:
 			case 128:
 			default:
-				typeName = "Interger";
+				typeName = "Integer";
 				break;
 			}
 		}
@@ -849,6 +983,26 @@ std::size_t CMakeBackend::getTypeFieldCount(llvm::Type* type)
 	return iter->second;
 }
 
+unsigned CMakeBackend::getTypeSizeInBits(Type* type)
+{
+	if (!type->isSized())
+	{
+		return 0;
+	}
+
+	if (const auto size = type->getScalarSizeInBits())
+	{
+		return size;
+	}
+
+	if (type->isPointerTy())
+	{
+		return m_DataLayout->getPointerSizeInBits();
+	}
+
+	return 0;
+}
+
 llvm::StringRef CMakeBackend::getTypeZeroInitializer(llvm::Type* type)
 {
 	auto iter = m_TypeZeroInitializerCache.find(type);
@@ -893,6 +1047,10 @@ llvm::StringRef CMakeBackend::getTypeZeroInitializer(llvm::Type* type)
 				zeroInitializer = "0";
 				break;
 			}
+		}
+		else if (isa<PointerType>(type))
+		{
+			zeroInitializer = "_LLVM_CMAKE_PTR.NUL";
 		}
 		else
 		{
@@ -940,7 +1098,7 @@ CMakeBackend::getReferencedGlobalValues(llvm::Function& f)
 
 void CMakeBackend::emitFunction(Function& f)
 {
-	m_Out << "function(" << f.getName() << ")\n";
+	m_Out << "function(" << NormalizeIdentifier(f.getName()) << ")\n";
 
 	++m_CurrentIntent;
 	emitFunctionPrologue(f);
@@ -948,6 +1106,10 @@ void CMakeBackend::emitFunction(Function& f)
 
 	for (auto& bb : f)
 	{
+		if (const auto loop = m_CurrentLoopInfo->getLoopFor(&bb))
+		{
+		}
+
 		emitBasicBlock(&bb);
 	}
 
@@ -1126,7 +1288,7 @@ std::pair<std::string, bool> CMakeBackend::evalConstant(llvm::Constant* con,
 
 		return { std::move(result), true };
 	}
-	else if (const auto zeroInitializer = dyn_cast<ConstantAggregateZero>(con))
+	else if (isa<ConstantAggregateZero>(con) || isa<UndefValue>(con))
 	{
 		return std::pair<std::string, bool>{ getTypeZeroInitializer(con->getType()), true };
 	}
@@ -1365,6 +1527,7 @@ void CMakeBackend::emitGetElementPtr(llvm::Value* ptrOperand, llvm::gep_type_ite
 			}
 			else if (const auto ptrType = dyn_cast<PointerType>(pointeeType))
 			{
+				// TODO: 确认正确性
 				const auto fieldSize = getTypeFieldCount(ptrType->getElementType());
 				realIdx += idxValue * fieldSize;
 				pointeeType = ptrType->getElementType();

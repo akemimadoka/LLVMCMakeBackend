@@ -2,4 +2,6 @@
 build
 testcase/*.cmake
 testcase/TestCpp.ll
+testcase/TestRust.ll
 testcase/VirtualTest.ll
+_LLVM_CMAKE_*

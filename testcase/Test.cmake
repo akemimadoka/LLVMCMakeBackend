@@ -47,3 +47,7 @@ CreateDerived(_LLVM_CMAKE_PTR.EXT:Obj)
 message(STATUS "CreateDerived: ${Obj}")
 InvokeFunc(_LLVM_CMAKE_PTR.EXT:Obj 1)
 message(STATUS "InvokeFunc: ${_LLVM_CMAKE_InvokeFunc_RETURN_VALUE}")
+
+include(${CMAKE_CURRENT_LIST_DIR}/TestRust.ll.cmake)
+_ZN8TestRust4mian17had6510f5de5bdbb1E()
+message(STATUS "mian: ${_LLVM_CMAKE__ZN8TestRust4mian17had6510f5de5bdbb1E_RETURN_VALUE}")

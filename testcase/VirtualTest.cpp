@@ -2,7 +2,7 @@ extern "C"
 {
 	struct VirtualBase
 	{
-		~VirtualBase() = default;
+		virtual ~VirtualBase() = default;
 
 		virtual int Func(int arg)
 		{

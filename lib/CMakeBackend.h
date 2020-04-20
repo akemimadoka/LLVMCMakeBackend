@@ -9,6 +9,7 @@
 #include <llvm/ADT/SmallSet.h>
 #include <llvm/ADT/SmallString.h>
 #include <llvm/ADT/StringExtras.h>
+#include <llvm/Analysis/LoopInfo.h>
 #include <llvm/CodeGen/IntrinsicLowering.h>
 #include <llvm/CodeGen/Passes.h>
 #include <llvm/IR/Attributes.h>
@@ -41,8 +42,8 @@ namespace LLVMCMakeBackend
 
 	public:
 		explicit CMakeBackend(llvm::raw_ostream& outStream)
-		    : FunctionPass{ ID }, m_Out{ outStream }, m_CurrentFunction{}, m_CurrentIntent{},
-		      m_CurrentTemporaryID{}
+		    : FunctionPass{ ID }, m_Out{ outStream }, m_CurrentFunction{}, m_CurrentLoopInfo{},
+		      m_CurrentIntent{}, m_CurrentTemporaryID{}
 		{
 		}
 
@@ -54,6 +55,8 @@ namespace LLVMCMakeBackend
 		bool doInitialization(llvm::Module& M) override;
 		bool doFinalization(llvm::Module& M) override;
 		bool runOnFunction(llvm::Function& F) override;
+
+		void getAnalysisUsage(llvm::AnalysisUsage& au) const override;
 
 		void visitInstruction(llvm::Instruction& I);
 
@@ -71,11 +74,15 @@ namespace LLVMCMakeBackend
 		void visitAllocaInst(llvm::AllocaInst& I);
 		void visitGetElementPtrInst(llvm::GetElementPtrInst& I);
 
+		void visitExtractValueInst(llvm::ExtractValueInst& I);
+		void visitInsertValueInst(llvm::InsertValueInst& I);
+
 		void visitBranchInst(llvm::BranchInst& I);
 
 	private:
 		llvm::raw_ostream& m_Out;
 		llvm::Function* m_CurrentFunction;
+		llvm::LoopInfo* m_CurrentLoopInfo;
 		std::vector<std::string> m_CurrentFunctionLocalEntityNames;
 		std::unique_ptr<llvm::DataLayout> m_DataLayout;
 		std::unique_ptr<llvm::IntrinsicLowering> m_IntrinsicLowering;
@@ -112,6 +119,8 @@ namespace LLVMCMakeBackend
 
 		std::unordered_map<llvm::Type*, std::size_t> m_TypeFieldCountCache;
 		std::size_t getTypeFieldCount(llvm::Type* type);
+
+		unsigned getTypeSizeInBits(llvm::Type* type);
 
 		std::unordered_map<llvm::Type*, std::string> m_TypeZeroInitializerCache;
 		llvm::StringRef getTypeZeroInitializer(llvm::Type* type);
