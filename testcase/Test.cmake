@@ -34,6 +34,9 @@ GetCallback(1)
 InvokeFunc(${_LLVM_CMAKE_GetCallback_RETURN_VALUE} 1)
 message(STATUS "InvokeFunc returns ${_LLVM_CMAKE_InvokeFunc_RETURN_VALUE}")
 
+LoopTest(4)
+message(STATUS "LoopTest returns ${_LLVM_CMAKE_LoopTest_RETURN_VALUE}")
+
 include(${CMAKE_CURRENT_LIST_DIR}/VirtualTest.ll.cmake)
 
 set(Obj "")

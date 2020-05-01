@@ -14,7 +14,6 @@
 #include <llvm/CodeGen/Passes.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/CFG.h>
-#include <llvm/IR/CallSite.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
@@ -43,7 +42,7 @@ namespace LLVMCMakeBackend
 	public:
 		explicit CMakeBackend(llvm::raw_ostream& outStream)
 		    : FunctionPass{ ID }, m_Out{ outStream }, m_CurrentFunction{}, m_CurrentLoopInfo{},
-		      m_CurrentIntent{}, m_CurrentTemporaryID{}
+		      m_CurrentLoop{}, m_CurrentIntent{}, m_CurrentTemporaryID{}
 		{
 		}
 
@@ -77,12 +76,15 @@ namespace LLVMCMakeBackend
 		void visitExtractValueInst(llvm::ExtractValueInst& I);
 		void visitInsertValueInst(llvm::InsertValueInst& I);
 
-		void visitBranchInst(llvm::BranchInst& I);
+		void visitBranchInst(llvm::BranchInst& I, llvm::Loop* loop = nullptr);
+
+		void visitICmpInst(llvm::ICmpInst& I);
 
 	private:
 		llvm::raw_ostream& m_Out;
 		llvm::Function* m_CurrentFunction;
 		llvm::LoopInfo* m_CurrentLoopInfo;
+		llvm::Loop* m_CurrentLoop;
 		std::vector<std::string> m_CurrentFunctionLocalEntityNames;
 		std::unique_ptr<llvm::DataLayout> m_DataLayout;
 		std::unique_ptr<llvm::IntrinsicLowering> m_IntrinsicLowering;
@@ -91,6 +93,8 @@ namespace LLVMCMakeBackend
 
 		void emitModulePrologue(llvm::Module& m);
 		void emitModuleEpilogue(llvm::Module& m);
+
+		void emitGlobals(llvm::Module& m);
 
 		bool lowerIntrinsics(llvm::Function& f);
 		void emitIntrinsics();
@@ -134,7 +138,8 @@ namespace LLVMCMakeBackend
 		void emitFunctionPrologue(llvm::Function& f);
 		void emitFunctionEpilogue(llvm::Function& f);
 
-		void emitBasicBlock(llvm::BasicBlock* bb);
+		llvm::Function::iterator emitLoop(llvm::Loop* loop);
+		void emitBasicBlock(llvm::BasicBlock* bb, llvm::Loop* loop = nullptr);
 
 		std::string evalOperand(llvm::Value* v, llvm::StringRef nameHint = "");
 		// 返回值：结果，是否内联

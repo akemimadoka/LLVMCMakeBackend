@@ -108,14 +108,73 @@ extern "C"
 		__asm__("message(STATUS \"Hello\")");
 	}
 
-	// int LoopTest(int count)
-	// {
-	// 	int result{};
-	// 	for (auto i = 0; i < count; ++i)
-	// 	{
-	// 		result += count;
-	// 	}
+	int BranchTest(int cond)
+	{
+		if (cond == 1)
+		{
+			return 1;
+		}
+		else if (cond == 2)
+		{
+			return 2;
+		}
+		else
+		{
+			return 0;
+		}
+	}
 
-	// 	return result;
-	// }
+	int LoopTest(int count)
+	{
+		int result{};
+		for (auto i = 0; i < count; ++i)
+		{
+			if (i > 2)
+			{
+				result += count;
+			}
+		}
+
+		return result;
+	}
+
+	int LoopTest2(int count)
+	{
+		int result{};
+		do
+		{
+			result += count;
+		} while (--count);
+		return result;
+	}
+
+	int LoopTest3(int count)
+	{
+		int result{};
+		while (true)
+		{
+			result += count;
+			if (result > 10)
+			{
+				break;
+			}
+			result += 1;
+		}
+		return result;
+	}
+
+	int LoopTest4(int count)
+	{
+		int result{};
+		while (true)
+		{
+			result += count;
+			if (result < 10)
+			{
+				continue;
+			}
+			result += 1;
+		}
+		return result;
+	}
 }
