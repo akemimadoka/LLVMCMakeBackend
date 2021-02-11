@@ -173,6 +173,10 @@ extern "C"
 			{
 				continue;
 			}
+			else
+			{
+				break;
+			}
 			result += 1;
 		}
 		return result;

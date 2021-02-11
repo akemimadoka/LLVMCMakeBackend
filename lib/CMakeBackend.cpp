@@ -1,5 +1,7 @@
 #include "CMakeBackend.h"
 
+#include "CheckNeedGotoPass.h"
+
 #include <llvm/Transforms/Utils.h>
 
 using namespace llvm;
@@ -57,8 +59,8 @@ function(_LLVM_CMAKE_EVAL)
 endfunction()
 
 macro(_LLVM_CMAKE_PROPAGATE_FUNCTION_RESULT _LLVM_CMAKE_PROPAGATE_FUNCTION_RESULT_FUNC_NAME)
-	set(_LLVM_CMAKE_${_LLVM_CMAKE_PROPAGATE_FUNCTION_RESULT_FUNC_NAME}_RETURN_VALUE ${_LLVM_CMAKE_${_LLVM_CMAKE_PROPAGATE_FUNCTION_RESULT_FUNC_NAME}_RETURN_VALUE} PARENT_SCOPE)
-	set(_LLVM_CMAKE_${_LLVM_CMAKE_PROPAGATE_FUNCTION_RESULT_FUNC_NAME}_RETURN_MODIFIED_EXTERNAL_VARIABLE_LIST ${_LLVM_CMAKE_${_LLVM_CMAKE_PROPAGATE_FUNCTION_RESULT_FUNC_NAME}_RETURN_MODIFIED_EXTERNAL_VARIABLE_LIST} PARENT_SCOPE)
+	set(_LLVM_CMAKE_RETURN_VALUE ${_LLVM_CMAKE_RETURN_VALUE} PARENT_SCOPE)
+	set(_LLVM_CMAKE_RETURN_MODIFIED_EXTERNAL_VARIABLE_LIST ${_LLVM_CMAKE_RETURN_MODIFIED_EXTERNAL_VARIABLE_LIST} PARENT_SCOPE)
 endmacro()
 
 function(_LLVM_CMAKE_INVOKE_FUNCTION_PTR _LLVM_CMAKE_INVOKE_FUNCTION_PTR_FUNC_PTR)
@@ -221,6 +223,8 @@ endfunction()
 	}
 } // namespace
 
+char CMakeBackend::ID{};
+
 bool CMakeBackend::doInitialization(Module& M)
 {
 	m_DataLayout = std::make_unique<DataLayout>(&M);
@@ -244,8 +248,15 @@ bool CMakeBackend::doFinalization(Module& M)
 bool CMakeBackend::runOnFunction(Function& F)
 {
 	m_CurrentFunction = &F;
-	m_CurrentLoopInfo = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-	m_CurrentLoop = nullptr;
+	const auto& checkNeedGotoPass = getAnalysis<CheckNeedGotoPass>();
+	if (checkNeedGotoPass.isCurrentFunctionNeedGoto())
+	{
+		m_CurrentStateInfo.emplace(checkNeedGotoPass.getCurrentStateInfo());
+	}
+	else
+	{
+		m_CurrentStateInfo.reset();
+	}
 	m_CurrentIntent = 0;
 	m_CurrentTemporaryID = 0;
 	m_TemporaryID.clear();
@@ -268,8 +279,7 @@ bool CMakeBackend::runOnFunction(Function& F)
 
 void CMakeBackend::getAnalysisUsage(llvm::AnalysisUsage& au) const
 {
-	au.addRequiredID(LoopSimplifyID);
-	au.addRequired<LoopInfoWrapperPass>();
+	au.addRequired<CheckNeedGotoPass>();
 	au.setPreservesCFG();
 }
 
@@ -383,7 +393,7 @@ void CMakeBackend::visitReturnInst(ReturnInst& i)
 
 void CMakeBackend::visitCallInst(CallInst& I)
 {
-	if (isa<InlineAsm>(I.getCalledValue()))
+	if (isa<InlineAsm>(I.getCalledOperand()))
 	{
 		visitInlineAsm(I);
 		return;
@@ -451,9 +461,8 @@ void CMakeBackend::visitCallInst(CallInst& I)
 			}
 
 			returnType = funcType->getReturnType();
-			returnValueName = "_LLVM_CMAKE_" + ptrValue + "_RETURN_VALUE";
-			returnModifiedListName =
-			    "_LLVM_CMAKE_" + ptrValue + "_RETURN_MODIFIED_EXTERNAL_VARIABLE_LIST";
+			returnValueName = "_LLVM_CMAKE_RETURN_VALUE";
+			returnModifiedListName = "_LLVM_CMAKE_RETURN_MODIFIED_EXTERNAL_VARIABLE_LIST";
 			m_Out << "_LLVM_CMAKE_INVOKE_FUNCTION_PTR(" << ptrValue << " ";
 		}
 		else
@@ -486,7 +495,7 @@ void CMakeBackend::visitCallInst(CallInst& I)
 
 void CMakeBackend::visitInlineAsm(CallInst& I)
 {
-	const auto as = cast<InlineAsm>(I.getCalledValue());
+	const auto as = cast<InlineAsm>(I.getCalledOperand());
 	emitIntent();
 	m_Out << as->getAsmString() << "\n";
 }
@@ -509,7 +518,7 @@ void CMakeBackend::visitStoreInst(llvm::StoreInst& I)
 
 void CMakeBackend::visitAllocaInst(llvm::AllocaInst& I)
 {
-	auto elemType = I.getAllocatedType();
+	const auto elemType = I.getAllocatedType();
 	assert(elemType == I.getType()->getPointerElementType());
 
 	const auto elemSize = I.getArraySize();
@@ -628,9 +637,19 @@ void CMakeBackend::visitInsertValueInst(llvm::InsertValueInst& I)
 	m_Out << "list(INSERT " << valueName << " " << realIdx << " " << valueValue << ")\n";
 }
 
-void CMakeBackend::visitBranchInst(BranchInst& I, llvm::Loop* loop)
+// 简单 if 形式
+// bb1 -> bb2 -> ... -> bb3 -> bb4
+//     \-------------------/
+//
+// if-else 形式
+// else 接 if 不影响判断
+//                            /---------------------\ 
+// bb1 -> bb2 -> ... -> bb3 -/  -> bb4 -> ... -> bb5 -> bb6
+//     \---------------------- /
+void CMakeBackend::visitBranchInst(BranchInst& I)
 {
 	const auto bb = I.getParent();
+	const auto next = bb->getNextNode();
 
 	if (I.isConditional())
 	{
@@ -640,111 +659,69 @@ void CMakeBackend::visitBranchInst(BranchInst& I, llvm::Loop* loop)
 		auto trueBranch = I.getSuccessor(0);
 		auto falseBranch = I.getSuccessor(1);
 
-		// auto trueFirst = true;
-		// if (std::distance(trueBranch->getIterator(), falseBranch->getIterator()) < 0)
-		// {
-		// 	trueFirst = false;
-		// }
-
-		if (loop && (loop->isLoopLatch(bb) || loop->isLoopExiting(bb)))
+		// 有效时所有分支全关联状态，直接跳转
+		if (m_CurrentStateInfo)
 		{
-			assert(trueBranch != falseBranch);
-
-			// 因为仅在处理循环时对 terminator 特别处理，所以当前 block 必然是
-			//  Latch Block 或 Exiting Block
-			// 先处理循环跳转，若另一个分支不是循环跳转则直接 endif 即可
-			if (loop->isLoopLatch(bb))
+			auto trueStateId = m_CurrentStateInfo->GetStateID(trueBranch);
+			auto falseStateId = m_CurrentStateInfo->GetStateID(falseBranch);
+			if (next == trueBranch || next == falseBranch)
 			{
-				if (trueBranch == loop->getHeader())
+				// 下面代码视 false 分支为跳转
+				// true 分支直接继续向下执行，因此生成 false 分支跳转
+				if (next == trueBranch)
+				{
+					emitIntent();
+					m_Out << "if(NOT " << condValue << ")\n";
+				}
+				else if (next == falseBranch)
 				{
 					emitIntent();
 					m_Out << "if(" << condValue << ")\n";
+					std::swap(trueBranch, falseBranch);
+					std::swap(trueStateId, falseStateId);
 				}
 				else
 				{
-					if (loop->isLoopExiting(bb))
-					{
-						// trueBranch 是 Exit Block
-						goto TrueBranchIsExitBlock;
-					}
-
-					emitIntent();
-					m_Out << "if(NOT " << condValue << ")\n";
-					std::swap(trueBranch, falseBranch);
+					// 是谁生成这种代码的？
+					return;
 				}
 
 				++m_CurrentIntent;
+				emitIntent();
+				m_Out << "set(_LLVM_CMAKE_LOOP_STATE \"" << falseStateId << "\")\n";
 				emitIntent();
 				m_Out << "continue()\n";
 				--m_CurrentIntent;
-
-				if (loop->isLoopExiting(bb))
-				{
-					emitIntent();
-					m_Out << "else()\n";
-
-					++m_CurrentIntent;
-					emitIntent();
-					m_Out << "break()\n";
-					--m_CurrentIntent;
-				}
-				else if (bb->getNextNode() != falseBranch)
-				{
-					errs() << I << "\n";
-					assert(!"Goto not supported in CMake.");
-					std::terminate();
-				}
-
 				emitIntent();
 				m_Out << "endif()\n";
+
+				return;
 			}
-			else
-			{
-				if (!loop->contains(trueBranch))
-				{
-				TrueBranchIsExitBlock:
-					emitIntent();
-					m_Out << "if(" << condValue << ")\n";
-				}
-				else
-				{
-					emitIntent();
-					m_Out << "if(NOT " << condValue << ")\n";
-					std::swap(trueBranch, falseBranch);
-				}
-
-				++m_CurrentIntent;
-				emitIntent();
-				m_Out << "break()\n";
-				--m_CurrentIntent;
-
-				if (loop->isLoopExiting(bb))
-				{
-					emitIntent();
-					m_Out << "else()\n";
-
-					++m_CurrentIntent;
-					emitIntent();
-					m_Out << "continue()\n";
-					--m_CurrentIntent;
-				}
-				else if (bb->getNextNode() != falseBranch)
-				{
-					errs() << I << "\n";
-					assert(!"Goto not supported in CMake.");
-					std::terminate();
-				}
-
-				emitIntent();
-				m_Out << "endif()\n";
-			}
-
+			assert(trueStateId != -1 && falseStateId != -1);
+			emitIntent();
+			m_Out << "if(" << condValue << ")\n";
+			++m_CurrentIntent;
+			emitIntent();
+			m_Out << "set(_LLVM_CMAKE_LOOP_STATE \"" << trueStateId << "\")\n";
+			emitIntent();
+			m_Out << "continue()\n";
+			--m_CurrentIntent;
+			emitIntent();
+			m_Out << "else()\n";
+			++m_CurrentIntent;
+			emitIntent();
+			m_Out << "set(_LLVM_CMAKE_LOOP_STATE \"" << falseStateId << "\")\n";
+			emitIntent();
+			m_Out << "continue()\n";
+			--m_CurrentIntent;
+			emitIntent();
+			m_Out << "endif()\n";
 			return;
 		}
 
-		if (bb->getNextNode() != trueBranch)
+		if (next != trueBranch)
 		{
-			if (bb->getNextNode() == falseBranch)
+			if (next == falseBranch)
 			{
 				emitIntent();
 				m_Out << "if(NOT " << condValue << ")\n";
@@ -769,14 +746,7 @@ void CMakeBackend::visitBranchInst(BranchInst& I, llvm::Loop* loop)
 		{
 			++m_CurrentIntent;
 			const auto endIfBlock = endIfBr->getSuccessor(0);
-			if (loop && endIfBlock == loop->getHeader())
-			{
-				m_CondElseEndifStack.push_back({ falseBranch, falseBranch });
-			}
-			else
-			{
-				m_CondElseEndifStack.push_back({ falseBranch, endIfBlock });
-			}
+			m_CondElseEndifStack.push_back({ falseBranch, endIfBlock });
 		}
 		else
 		{
@@ -789,32 +759,25 @@ void CMakeBackend::visitBranchInst(BranchInst& I, llvm::Loop* loop)
 	{
 		const auto successor = I.getSuccessor(0);
 
-		if (loop && (loop->isLoopExiting(bb) || loop->isLoopLatch(bb)))
+		if (successor != next)
 		{
-			if (loop->isLoopExiting(bb))
+			if (m_CondElseEndifStack.empty() || m_CondElseEndifStack.back().second != successor)
 			{
-				emitIntent();
-				m_Out << "break()\n";
-			}
-			else
-			{
-				assert(loop->isLoopLatch(bb));
-
-				emitIntent();
-				m_Out << "continue()\n";
-			}
-		}
-		else
-		{
-			const auto next = bb->getNextNode();
-			if (successor != next)
-			{
-				if (m_CondElseEndifStack.empty() || m_CondElseEndifStack.back().second != successor)
+				if (m_CurrentStateInfo)
 				{
-					errs() << I << "\n";
-					assert(!"Goto not supported in CMake.");
-					std::terminate();
+					const auto stateId = m_CurrentStateInfo->GetStateID(successor);
+					if (stateId != -1)
+					{
+						emitIntent();
+						m_Out << "set(_LLVM_CMAKE_LOOP_STATE \"" << stateId << "\")\n";
+						emitIntent();
+						m_Out << "continue()\n";
+						return;
+					}
 				}
+				errs() << I << "\n";
+				assert(!"Goto not supported in CMake.");
+				std::terminate();
 			}
 		}
 	}
@@ -1085,15 +1048,15 @@ std::string CMakeBackend::getValueName(llvm::Value* v)
 
 std::string CMakeBackend::getFunctionReturnValueName(llvm::Function* f)
 {
-	return "_LLVM_CMAKE_" + getValueName(f) + "_RETURN_VALUE";
+	return "_LLVM_CMAKE_RETURN_VALUE";
 }
 
 std::string CMakeBackend::getFunctionModifiedExternalVariableListName(llvm::Function* f,
                                                                       bool isReturning)
 {
-	return "_LLVM_CMAKE_" + getValueName(f) +
-	       (isReturning ? "_RETURN_MODIFIED_EXTERNAL_VARIABLE_LIST"
-	                    : "_MODIFIED_EXTERNAL_VARIABLE_LIST");
+	using namespace std::literals::string_literals;
+	return "_LLVM_CMAKE"s + (isReturning ? "_RETURN_MODIFIED_EXTERNAL_VARIABLE_LIST"
+	                                     : "_MODIFIED_EXTERNAL_VARIABLE_LIST");
 }
 
 llvm::StringRef CMakeBackend::getTypeName(llvm::Type* type)
@@ -1286,8 +1249,8 @@ llvm::StringRef CMakeBackend::getTypeZeroInitializer(llvm::Type* type)
 std::unordered_set<llvm::GlobalValue*> const&
 CMakeBackend::getReferencedGlobalValues(llvm::Function& f)
 {
-	auto iter = m_FunctionRefernecedGlobalValues.find(&f);
-	if (iter == m_FunctionRefernecedGlobalValues.end())
+	auto iter = m_FunctionReferencedGlobalValues.find(&f);
+	if (iter == m_FunctionReferencedGlobalValues.end())
 	{
 		std::unordered_set<llvm::GlobalValue*> referencedGlobalValues;
 
@@ -1308,7 +1271,7 @@ CMakeBackend::getReferencedGlobalValues(llvm::Function& f)
 		}
 
 		std::tie(iter, std::ignore) =
-		    m_FunctionRefernecedGlobalValues.emplace(&f, std::move(referencedGlobalValues));
+		    m_FunctionReferencedGlobalValues.emplace(&f, std::move(referencedGlobalValues));
 	}
 
 	return iter->second;
@@ -1322,28 +1285,15 @@ void CMakeBackend::emitFunction(Function& f)
 	emitFunctionPrologue(f);
 	--m_CurrentIntent;
 
-	for (auto iter = f.begin(); iter != f.end();)
+	if (m_CurrentStateInfo)
 	{
-		auto& bb = *iter;
-
-		if (const auto loop = m_CurrentLoopInfo->getLoopFor(&bb))
-		{
-			assert(loop->getHeader() == &bb);
-#ifndef NDEBUG
-			outs() << *loop << "\n";
-#endif
-			const auto successor = emitLoop(loop);
-			// 循环尾就在函数结尾？
-			if (loop->contains(&*successor))
-			{
-				break;
-			}
-			iter = successor;
-		}
-		else
+		emitStateMachineFunction(f);
+	}
+	else
+	{
+		for (auto& bb : f)
 		{
 			emitBasicBlock(&bb);
-			++iter;
 		}
 	}
 
@@ -1352,6 +1302,58 @@ void CMakeBackend::emitFunction(Function& f)
 	--m_CurrentIntent;
 
 	m_Out << "endfunction()\n\n";
+}
+
+void CMakeBackend::emitStateMachineFunction(llvm::Function& f)
+{
+	assert(m_CurrentStateInfo);
+
+	m_CurrentStateInfo->Init();
+
+	++m_CurrentIntent;
+	emitIntent();
+	m_Out << "set(_LLVM_CMAKE_LOOP_STATE 0)\n";
+	emitIntent();
+	m_Out << "while(1)\n";
+
+	std::size_t curStateId = 0;
+	auto shouldEmitSectionProlog = true;
+
+	for (auto& bb : f)
+	{
+		if (shouldEmitSectionProlog)
+		{
+			++m_CurrentIntent;
+			emitIntent();
+			m_Out << "if(_LLVM_CMAKE_LOOP_STATE STREQUAL \"" << curStateId << "\")\n";
+			shouldEmitSectionProlog = false;
+		}
+
+		emitBasicBlock(&bb);
+
+		const auto stateId = m_CurrentStateInfo->GetNextStateID();
+		if (curStateId != stateId)
+		{
+			// 若上一个不是 fall through，此处无需进行生成
+			if (stateId != -1)
+			{
+				++m_CurrentIntent;
+				emitIntent();
+				m_Out << "set(_LLVM_CMAKE_LOOP_STATE \"" << stateId << "\")\n";
+				--m_CurrentIntent;
+			}
+
+			emitIntent();
+			m_Out << "endif()\n";
+			--m_CurrentIntent;
+			curStateId = stateId;
+			shouldEmitSectionProlog = true;
+		}
+	}
+
+	emitIntent();
+	m_Out << "endwhile()\n";
+	--m_CurrentIntent;
 }
 
 void CMakeBackend::emitFunctionPrologue(llvm::Function& f)
@@ -1379,39 +1381,7 @@ void CMakeBackend::emitFunctionEpilogue(llvm::Function& f)
 {
 }
 
-llvm::Function::iterator CMakeBackend::emitLoop(llvm::Loop* loop)
-{
-	++m_CurrentIntent;
-
-	emitIntent();
-	m_Out << "while(1)\n";
-
-	auto iter = loop->getHeader()->getIterator();
-	do
-	{
-		const auto bb = &*iter;
-		if (const auto innerLoop = m_CurrentLoopInfo->getLoopFor(bb);
-		    innerLoop && innerLoop->getParentLoop() == loop)
-		{
-			assert(innerLoop->getHeader() == bb);
-			iter = emitLoop(innerLoop);
-		}
-		else
-		{
-			emitBasicBlock(bb, loop);
-		}
-
-		++iter;
-	} while (loop->contains(&*iter));
-
-	emitIntent();
-	m_Out << "endwhile()\n";
-	--m_CurrentIntent;
-
-	return iter;
-}
-
-void CMakeBackend::emitBasicBlock(BasicBlock* bb, llvm::Loop* loop)
+void CMakeBackend::emitBasicBlock(BasicBlock* bb, bool emitTerminator)
 {
 #ifndef NDEBUG
 	outs() << *bb << "\n";
@@ -1441,16 +1411,10 @@ void CMakeBackend::emitBasicBlock(BasicBlock* bb, llvm::Loop* loop)
 		visit(ins);
 	}
 
-	if (loop)
-	{
-		assert(isa<BranchInst>(bb->getTerminator()));
-		visitBranchInst(*cast<BranchInst>(bb->getTerminator()), loop);
-	}
-	else
+	if (emitTerminator)
 	{
 		visit(bb->getTerminator());
 	}
-
 	--m_CurrentIntent;
 }
 
@@ -1634,8 +1598,6 @@ llvm::StringRef CMakeBackend::getTypeLayout(llvm::Type* type)
 void CMakeBackend::emitLoad(llvm::StringRef resultName, llvm::Value* srcPtr)
 {
 	const auto operand = evalOperand(srcPtr);
-	const auto headName = allocateTemporaryName();
-
 	emitIntent();
 	m_Out << "_LLVM_CMAKE_LOAD(" << operand << " " << resultName << ")\n";
 }

@@ -1,5 +1,7 @@
 #include "CMakeTargetMachine.h"
 #include "CMakeBackend.h"
+#include "CheckNeedGotoPass.h"
+
 #include <llvm/CodeGen/TargetPassConfig.h>
 #include <llvm/Support/TargetRegistry.h>
 #include <llvm/Transforms/Utils.h>
@@ -45,7 +47,8 @@ bool LLVMCMakeBackend::CMakeTargetMachine::addPassesToEmitFile(
 
 	const auto passConfig = createPassConfig(PM);
 	PM.add(passConfig);
-	PM.add(new LLVMCMakeBackend::CMakeBackend(Out));
+	PM.add(new CheckNeedGotoPass());
+	PM.add(new CMakeBackend(Out));
 
 	return false;
 }

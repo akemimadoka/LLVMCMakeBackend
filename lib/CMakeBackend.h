@@ -2,6 +2,7 @@
 #define CMAKE_BACKEND_H
 
 #include "CMakeTargetMachine.h"
+#include "CheckNeedGotoPass.h"
 
 #include <unordered_set>
 
@@ -34,15 +35,15 @@ namespace LLVMCMakeBackend
 {
 	class CMakeBackend : public llvm::FunctionPass, public llvm::InstVisitor<CMakeBackend>
 	{
-		inline static char ID;
+		static char ID;
 
 		static constexpr unsigned ImplementedIntrinsics[]{ llvm::Intrinsic::memcpy,
 			                                                 llvm::Intrinsic::memset };
 
 	public:
 		explicit CMakeBackend(llvm::raw_ostream& outStream)
-		    : FunctionPass{ ID }, m_Out{ outStream }, m_CurrentFunction{}, m_CurrentLoopInfo{},
-		      m_CurrentLoop{}, m_CurrentIntent{}, m_CurrentTemporaryID{}
+		    : FunctionPass{ ID }, m_Out{ outStream }, m_CurrentFunction{}, m_CurrentIntent{},
+		      m_CurrentTemporaryID{}
 		{
 		}
 
@@ -76,15 +77,14 @@ namespace LLVMCMakeBackend
 		void visitExtractValueInst(llvm::ExtractValueInst& I);
 		void visitInsertValueInst(llvm::InsertValueInst& I);
 
-		void visitBranchInst(llvm::BranchInst& I, llvm::Loop* loop = nullptr);
+		void visitBranchInst(llvm::BranchInst& I);
 
 		void visitICmpInst(llvm::ICmpInst& I);
 
 	private:
 		llvm::raw_ostream& m_Out;
 		llvm::Function* m_CurrentFunction;
-		llvm::LoopInfo* m_CurrentLoopInfo;
-		llvm::Loop* m_CurrentLoop;
+		std::optional<StateInfo> m_CurrentStateInfo;
 		std::vector<std::string> m_CurrentFunctionLocalEntityNames;
 		std::unique_ptr<llvm::DataLayout> m_DataLayout;
 		std::unique_ptr<llvm::IntrinsicLowering> m_IntrinsicLowering;
@@ -130,16 +130,16 @@ namespace LLVMCMakeBackend
 		llvm::StringRef getTypeZeroInitializer(llvm::Type* type);
 
 		std::unordered_map<llvm::Function*, std::unordered_set<llvm::GlobalValue*>>
-		    m_FunctionRefernecedGlobalValues;
+		    m_FunctionReferencedGlobalValues;
 
 		std::unordered_set<llvm::GlobalValue*> const& getReferencedGlobalValues(llvm::Function& f);
 
 		void emitFunction(llvm::Function& f);
 		void emitFunctionPrologue(llvm::Function& f);
 		void emitFunctionEpilogue(llvm::Function& f);
+		void emitStateMachineFunction(llvm::Function& f);
 
-		llvm::Function::iterator emitLoop(llvm::Loop* loop);
-		void emitBasicBlock(llvm::BasicBlock* bb, llvm::Loop* loop = nullptr);
+		void emitBasicBlock(llvm::BasicBlock* bb, bool emitTerminator = true);
 
 		std::string evalOperand(llvm::Value* v, llvm::StringRef nameHint = "");
 		// 返回值：结果，是否内联

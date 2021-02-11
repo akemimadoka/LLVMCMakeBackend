@@ -7,10 +7,16 @@ set(LLVM_LINK_COMPONENTS
 	Support
 	Target
 	SelectionDAG
-	TransformUtils)
+	TransformUtils
+)
+
+file(GLOB_RECURSE SRCS
+	*.cpp
+	*.h
+)
 
 add_llvm_target(CMakeBackendCodeGen
-	CMakeBackend.cpp
-	CMakeTargetMachine.cpp)
+	${SRCS}
+)
 
 target_compile_features(LLVMCMakeBackendCodeGen PUBLIC cxx_std_20)
