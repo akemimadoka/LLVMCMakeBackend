@@ -1,8 +1,9 @@
-# include(${CMAKE_CURRENT_LIST_DIR}/Test.ll.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/Test.ll.cmake)
 
-# Main()
-# message(STATUS "Main() returned ${_LLVM_CMAKE_RETURN_VALUE}")
+Main()
+message(STATUS "Main() returned ${_LLVM_CMAKE_RETURN_VALUE}")
 
+# compile with `clang++ TestCpp.cpp -S -emit-llvm -o TestCpp.ll`
 include(${CMAKE_CURRENT_LIST_DIR}/TestCpp.ll.cmake)
 
 GetElem(1)
@@ -46,20 +47,22 @@ message(STATUS "LoopTest3 returns ${_LLVM_CMAKE_RETURN_VALUE}")
 LoopTest4(4)
 message(STATUS "LoopTest4 returns ${_LLVM_CMAKE_RETURN_VALUE}")
 
-# include(${CMAKE_CURRENT_LIST_DIR}/VirtualTest.ll.cmake)
+# compile with `clang++ VirtualTest.cpp -S -emit-llvm -fno-rtti -fno-exceptions -o VirtualTest.ll`
+include(${CMAKE_CURRENT_LIST_DIR}/VirtualTest.ll.cmake)
 
-# set(Obj "")
-# CreateVirtualBase(_LLVM_CMAKE_PTR.EXT:Obj)
-# message(STATUS "CreateVirtualBase: ${Obj}")
-# InvokeFunc(_LLVM_CMAKE_PTR.EXT:Obj 1)
-# message(STATUS "InvokeFunc: ${_LLVM_CMAKE_RETURN_VALUE}")
+set(Obj "")
+CreateVirtualBase(_LLVM_CMAKE_PTR.EXT:Obj)
+message(STATUS "CreateVirtualBase: ${Obj}")
+InvokeFunc(_LLVM_CMAKE_PTR.EXT:Obj 1)
+message(STATUS "InvokeFunc: ${_LLVM_CMAKE_RETURN_VALUE}")
 
-# set(Obj "")
-# CreateDerived(_LLVM_CMAKE_PTR.EXT:Obj)
-# message(STATUS "CreateDerived: ${Obj}")
-# InvokeFunc(_LLVM_CMAKE_PTR.EXT:Obj 1)
-# message(STATUS "InvokeFunc: ${_LLVM_CMAKE_RETURN_VALUE}")
+set(Obj "")
+CreateDerived(_LLVM_CMAKE_PTR.EXT:Obj)
+message(STATUS "CreateDerived: ${Obj}")
+InvokeFunc(_LLVM_CMAKE_PTR.EXT:Obj 1)
+message(STATUS "InvokeFunc: ${_LLVM_CMAKE_RETURN_VALUE}")
 
-# include(${CMAKE_CURRENT_LIST_DIR}/TestRust.ll.cmake)
-# _ZN8TestRust4mian17had6510f5de5bdbb1E()
-# message(STATUS "mian: ${_LLVM_CMAKE_RETURN_VALUE}")
+# compile with `rustc --emit=llvm-ir --crate-type=lib TestRust.rs -o TestRust.ll`
+include(${CMAKE_CURRENT_LIST_DIR}/TestRust.ll.cmake)
+rust_mian()
+message(STATUS "rust_mian: ${_LLVM_CMAKE_RETURN_VALUE}")

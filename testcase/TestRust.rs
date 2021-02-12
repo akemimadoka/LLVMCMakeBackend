@@ -62,7 +62,8 @@ pub fn GetValue(o : &dyn GetValueTrait) -> i32
     o.GetValue()
 }
 
-pub fn mian() -> i32
+#[no_mangle]
+pub fn rust_mian() -> i32
 {
     let foo = Foo::new(123);
     let bar = Bar::new();
