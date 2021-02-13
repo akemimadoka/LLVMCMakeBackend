@@ -8,7 +8,7 @@ Well, this is a stupid project, but implementing it is a funny experience, and i
 Build
 ----
 
-This project depends on LLVM 13. So installing it first is needed, by `apt install llvm-13-dev` (add [llvm apt source](https://apt.llvm.org/) first) or somewhat. Then run
+This project depends on LLVM 13. So installing it first is needed, by `apt install llvm-13-dev` (add [llvm apt source](https://apt.llvm.org/) first) or build them yourself. Then run
 
 ```
 mkdir build && cd build
