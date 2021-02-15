@@ -703,19 +703,17 @@ void CMakeBackend::visitBranchInst(BranchInst& I)
 			++m_CurrentIntent;
 			emitIntent();
 			m_Out << "set(_LLVM_CMAKE_LOOP_STATE \"" << trueStateId << "\")\n";
-			emitIntent();
-			m_Out << "continue()\n";
 			--m_CurrentIntent;
 			emitIntent();
 			m_Out << "else()\n";
 			++m_CurrentIntent;
 			emitIntent();
 			m_Out << "set(_LLVM_CMAKE_LOOP_STATE \"" << falseStateId << "\")\n";
-			emitIntent();
-			m_Out << "continue()\n";
 			--m_CurrentIntent;
 			emitIntent();
 			m_Out << "endif()\n";
+			emitIntent();
+			m_Out << "continue()\n";
 			return;
 		}
 
@@ -1329,13 +1327,19 @@ void CMakeBackend::emitStateMachineFunction(llvm::Function& f)
 			shouldEmitSectionProlog = false;
 		}
 
-		emitBasicBlock(&bb);
+		emitBasicBlock(&bb, false);
+
+		const auto terminator = bb.getTerminator();
+		const auto br = llvm::dyn_cast<BranchInst>(terminator);
+		const auto isFallThrough = br && br->isUnconditional() && br->getSuccessor(0) == bb.getNextNode();
+		++m_CurrentIntent;
+		visit(terminator);
+		--m_CurrentIntent;
 
 		const auto stateId = m_CurrentStateInfo->GetNextStateID();
 		if (curStateId != stateId)
 		{
-			// 若上一个不是 fall through，此处无需进行生成
-			if (stateId != -1)
+			if (isFallThrough)
 			{
 				++m_CurrentIntent;
 				emitIntent();

@@ -4,4 +4,5 @@ testcase/*.cmake
 testcase/TestCpp.ll
 testcase/TestRust.ll
 testcase/VirtualTest.ll
+testcase/Fib.ll
 _LLVM_CMAKE_*
