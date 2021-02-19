@@ -67,6 +67,7 @@ include(${CMAKE_CURRENT_LIST_DIR}/TestRust.ll.cmake)
 rust_mian()
 message(STATUS "rust_mian: ${_LLVM_CMAKE_RETURN_VALUE}")
 
+# compile with `clang++ Fib.cpp -S -emit-llvm -o Fib.ll`
 include(${CMAKE_CURRENT_LIST_DIR}/Fib.ll.cmake)
-fib(1000)
+fib(100)
 message(STATUS "fib: ${_LLVM_CMAKE_RETURN_VALUE}")

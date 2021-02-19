@@ -3,6 +3,9 @@
 #include <llvm/IR/Instructions.h>
 
 #include <unordered_set>
+#if __has_include(<version>)
+#include <version>
+#endif
 
 using namespace LLVMCMakeBackend;
 
@@ -18,14 +21,7 @@ void StateInfo::Init()
 
 std::size_t StateInfo::GetNextStateID()
 {
-    if (!m_CurBB)
-    {
-        return -1;
-    }
-
-	m_CurBB = m_CurBB->getNextNode();
-
-    if (!m_CurBB)
+    if (!m_CurBB || !(m_CurBB = m_CurBB->getNextNode()))
     {
         return -1;
     }
@@ -162,5 +158,20 @@ void CheckNeedGotoPass::buildState(llvm::Function& f)
 			}
 		}
 	}
+#if __cpp_lib_erase_if >= 202002L
 	std::erase_if(m_BBList, [&](const llvm::BasicBlock* bb) { return !jumpedToBB.contains(bb); });
+#else
+	for (auto iter = m_BBList.begin(); iter != m_BBList.end();)
+	{
+		const auto bb = *iter;
+		if (jumpedToBB.find(bb) == jumpedToBB.end())
+		{
+			iter = m_BBList.erase(iter);
+		}
+		else
+		{
+			++iter;
+		}
+	}
+#endif
 }

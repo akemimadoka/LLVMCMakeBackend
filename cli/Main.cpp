@@ -16,6 +16,7 @@ int main(int argc, char** argv)
 	if (argc != 2)
 	{
 		std::cerr << "Wrong arg." << std::endl;
+		std::cerr << "Usage: " << argv[0] << " SomeModule.ll" << std::endl;
 		return 1;
 	}
 
