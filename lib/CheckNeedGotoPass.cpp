@@ -4,7 +4,7 @@
 
 #include <unordered_set>
 #if __has_include(<version>)
-#include <version>
+#	include <version>
 #endif
 
 using namespace LLVMCMakeBackend;
@@ -21,10 +21,10 @@ void StateInfo::Init()
 
 std::size_t StateInfo::GetNextStateID()
 {
-    if (!m_CurBB || !(m_CurBB = m_CurBB->getNextNode()))
-    {
-        return -1;
-    }
+	if (!m_CurBB || !(m_CurBB = m_CurBB->getNextNode()))
+	{
+		return -1;
+	}
 
 	if (m_CurBBStateID < m_BBList.size() - 1 && m_CurBB == m_BBList[m_CurBBStateID + 1])
 	{
@@ -35,13 +35,13 @@ std::size_t StateInfo::GetNextStateID()
 
 std::size_t StateInfo::GetStateID(const llvm::BasicBlock* bb)
 {
-    const auto iter = std::find(m_BBList.begin(), m_BBList.end(), bb);
-    if (iter == m_BBList.end())
-    {
-        return -1;
-    }
+	const auto iter = std::find(m_BBList.begin(), m_BBList.end(), bb);
+	if (iter == m_BBList.end())
+	{
+		return -1;
+	}
 
-    return iter - m_BBList.begin();
+	return iter - m_BBList.begin();
 }
 
 char CheckNeedGotoPass::ID{};
@@ -84,11 +84,11 @@ bool CheckNeedGotoPass::checkNeedGoto(llvm::Function& f) const
 		const auto terminator = bb.getTerminator();
 		if (const auto br = llvm::dyn_cast<llvm::BranchInst>(terminator))
 		{
-            // 若 br 出现在函数结尾的 bb 里，则其一定是前向的，因此一定需要 goto
-            if (&bb == &f.back())
-            {
-                return true;
-            }
+			// 若 br 出现在函数结尾的 bb 里，则其一定是前向的，因此一定需要 goto
+			if (&bb == &f.back())
+			{
+				return true;
+			}
 
 			const auto next = bb.getNextNode();
 			if (br->isUnconditional())

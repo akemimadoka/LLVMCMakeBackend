@@ -591,7 +591,6 @@ void CMakeBackend::visitInlineAsm(CallInst& I)
 		}
 	}
 
-	emitIntent();
 	m_Out << result << "\n";
 
 	if (!outputVars.empty())
@@ -752,7 +751,7 @@ void CMakeBackend::visitInsertValueInst(llvm::InsertValueInst& I)
 //
 // if-else 形式
 // else 接 if 不影响判断
-//                            /---------------------\ 
+//                            /---------------------\
 // bb1 -> bb2 -> ... -> bb3 -/  -> bb4 -> ... -> bb5 -> bb6
 //     \---------------------- /
 void CMakeBackend::visitBranchInst(BranchInst& I)

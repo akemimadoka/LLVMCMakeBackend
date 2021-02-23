@@ -13,12 +13,12 @@ namespace LLVMCMakeBackend
 	//   if(_LLVM_CMAKE_LOOP_STATE STREQUAL "0")
 	//     # do sth
 	//     set(_LLVM_CMAKE_LOOP_STATE "1")
-    //   endif()
+	//   endif()
 	//   if(_LLVM_CMAKE_LOOP_STATE STREQUAL "1")
 	//     # do sth2
 	//     set(_LLVM_CMAKE_LOOP_STATE "3")
-    //     continue()
-    //   endif()
+	//     continue()
+	//   endif()
 	//   if(_LLVM_CMAKE_LOOP_STATE STREQUAL "2")
 	//     ...
 	//   endif()
@@ -31,8 +31,8 @@ namespace LLVMCMakeBackend
 
 		void Init();
 		std::size_t GetNextStateID();
-        // 仅对 section 头部返回 id，若非头部返回 -1
-        std::size_t GetStateID(const llvm::BasicBlock* bb);
+		// 仅对 section 头部返回 id，若非头部返回 -1
+		std::size_t GetStateID(const llvm::BasicBlock* bb);
 
 	private:
 		mutable const llvm::BasicBlock* m_CurBB;
@@ -52,7 +52,7 @@ namespace LLVMCMakeBackend
 		bool isCurrentFunctionNeedGoto() const noexcept;
 		StateInfo getCurrentStateInfo() const noexcept;
 
-        static char ID;
+		static char ID;
 
 	private:
 		std::vector<const llvm::BasicBlock*> m_BBList;
