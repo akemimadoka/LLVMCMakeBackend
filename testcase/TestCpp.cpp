@@ -103,9 +103,20 @@ extern "C"
 		return callback(arg);
 	}
 
-	void AsmTest(int arg)
+	int AsmTest(int arg1, int arg2)
 	{
-		__asm__("message(STATUS \"Hello\")");
+		int result1, result2;
+		asm(
+			R"(
+message(STATUS "arg1 is %2, arg2 is %3")
+math(EXPR %0 "%2 + %3")
+math(EXPR %1 "%2 - %3")
+)"
+			: "=r"(result1), "=r"(result2)
+			: "r"(arg1), "r"(arg2)
+			:
+		);
+		return result1 * result2;
 	}
 
 	int BranchTest(int cond)

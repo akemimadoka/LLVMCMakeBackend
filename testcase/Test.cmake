@@ -35,6 +35,9 @@ GetCallback(1)
 InvokeFunc(${_LLVM_CMAKE_RETURN_VALUE} 1)
 message(STATUS "InvokeFunc returns ${_LLVM_CMAKE_RETURN_VALUE}")
 
+AsmTest(1 2)
+message(STATUS "AsmTest returns ${_LLVM_CMAKE_RETURN_VALUE}")
+
 LoopTest(4)
 message(STATUS "LoopTest returns ${_LLVM_CMAKE_RETURN_VALUE}")
 

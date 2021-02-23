@@ -4,6 +4,8 @@
 
 #include <llvm/Transforms/Utils.h>
 
+#include <charconv>
+
 using namespace llvm;
 using namespace LLVMCMakeBackend;
 
@@ -503,8 +505,108 @@ void CMakeBackend::visitCallInst(CallInst& I)
 void CMakeBackend::visitInlineAsm(CallInst& I)
 {
 	const auto as = cast<InlineAsm>(I.getCalledOperand());
+	const auto constraints = as->ParseConstraints();
+	const auto retValueName = getValueName(&I);
+	std::unordered_map<std::size_t, std::string> outputVars;
+	std::unordered_map<std::size_t, std::string> inputVars;
+	std::size_t argCount = 0;
+	for (std::size_t i = 0; i < constraints.size(); ++i)
+	{
+		const auto& info = constraints[i];
+		if (info.Type == InlineAsm::isOutput)
+		{
+			outputVars.emplace(i, allocateTemporaryName());
+		}
+		else if (info.Type == InlineAsm::isInput)
+		{
+			const auto arg = I.getArgOperand(argCount++);
+			inputVars.emplace(i, evalOperand(arg));
+		}
+	}
+
+	std::string_view templateString = as->getAsmString();
+	std::string result;
+
+	while (true)
+	{
+		const auto nextDollar = templateString.find('$');
+		if (nextDollar != std::string_view::npos)
+		{
+			result.append(templateString.begin(), nextDollar);
+			if (nextDollar == templateString.size())
+			{
+				assert("Invalid asm");
+				std::terminate();
+			}
+			const auto nextChar = templateString[nextDollar + 1];
+			if (nextChar == '$')
+			{
+				result.append(1, '$');
+				templateString = templateString.substr(nextDollar + 2);
+			}
+			else if (nextChar >= '0' && nextChar <= '9')
+			{
+				unsigned index;
+				if (const auto [ptr, ec] = std::from_chars(templateString.begin() + nextDollar + 1,
+				                                           templateString.end(), index);
+				    ec == std::errc{}) [[likely]]
+				{
+					if (index >= constraints.size())
+					{
+						assert(!"Invalid index");
+						std::terminate();
+					}
+					const auto refConstraint = constraints[index];
+					if (refConstraint.Type == InlineAsm::isInput)
+					{
+						result.append(inputVars[index]);
+					}
+					else if (refConstraint.Type == InlineAsm::isOutput)
+					{
+						result.append(outputVars[index]);
+					}
+					else
+					{
+						assert("Invalid asm");
+						std::terminate();
+					}
+					templateString = templateString.substr(ptr - templateString.begin());
+				}
+				else
+				{
+					assert(!"Impossible");
+					std::terminate();
+				}
+			}
+			else
+			{
+				assert("Invalid asm");
+				std::terminate();
+			}
+		}
+		else
+		{
+			result.append(templateString);
+			break;
+		}
+	}
+
 	emitIntent();
-	m_Out << as->getAsmString() << "\n";
+	m_Out << result << "\n";
+
+	if (!outputVars.empty())
+	{
+		emitIntent();
+		m_Out << "set(" << retValueName << " \"";
+		auto iter = outputVars.begin();
+		m_Out << "${" << iter->second << "}";
+		++iter;
+		for (; iter != outputVars.end(); ++iter)
+		{
+			m_Out << ";${" << iter->second << "}";
+		}
+		m_Out << "\")\n";
+	}
 }
 
 void CMakeBackend::visitBinaryOperator(llvm::BinaryOperator& I)
@@ -1338,7 +1440,8 @@ void CMakeBackend::emitStateMachineFunction(llvm::Function& f)
 
 		const auto terminator = bb.getTerminator();
 		const auto br = llvm::dyn_cast<BranchInst>(terminator);
-		const auto isFallThrough = br && br->isUnconditional() && br->getSuccessor(0) == bb.getNextNode();
+		const auto isFallThrough =
+		    br && br->isUnconditional() && br->getSuccessor(0) == bb.getNextNode();
 		++m_CurrentIntent;
 		visit(terminator);
 		--m_CurrentIntent;
