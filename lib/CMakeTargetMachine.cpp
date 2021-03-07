@@ -47,6 +47,7 @@ bool LLVMCMakeBackend::CMakeTargetMachine::addPassesToEmitFile(
 
 	const auto passConfig = createPassConfig(PM);
 	PM.add(passConfig);
+	PM.add(createLowerSwitchPass());
 	PM.add(new CheckNeedGotoPass());
 	PM.add(new CMakeBackend(Out));
 

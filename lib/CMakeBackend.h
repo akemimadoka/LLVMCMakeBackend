@@ -81,6 +81,8 @@ namespace LLVMCMakeBackend
 
 		void visitICmpInst(llvm::ICmpInst& I);
 
+		void visitSelectInst(llvm::SelectInst& I);
+
 	private:
 		llvm::raw_ostream& m_Out;
 		llvm::Function* m_CurrentFunction;

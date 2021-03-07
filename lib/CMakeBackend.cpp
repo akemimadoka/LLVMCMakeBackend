@@ -289,6 +289,7 @@ bool CMakeBackend::runOnFunction(Function& F)
 void CMakeBackend::getAnalysisUsage(llvm::AnalysisUsage& au) const
 {
 	au.addRequired<CheckNeedGotoPass>();
+	au.addPreservedID(LowerSwitchID);
 	au.setPreservesCFG();
 }
 
@@ -984,6 +985,38 @@ void CMakeBackend::visitICmpInst(llvm::ICmpInst& I)
 	m_Out << "set(" << resultName << " 0)\n";
 	--m_CurrentIntent;
 
+	emitIntent();
+	m_Out << "endif()\n";
+}
+
+void CMakeBackend::visitSelectInst(llvm::SelectInst& I)
+{
+	const auto resultName = getValueName(&I);
+
+	const auto cond = I.getCondition();
+	const auto trueValue = I.getTrueValue();
+	const auto falseValue = I.getFalseValue();
+
+	if (isa<llvm::VectorType>(cond->getType()))
+	{
+		assert(!"Unimplemented");
+		std::terminate();
+	}
+	const auto condExpr = evalOperand(cond);
+	emitIntent();
+	m_Out << "if(" << condExpr << ")\n";
+	++m_CurrentIntent;
+	const auto trueValueExpr = evalOperand(trueValue);
+	emitIntent();
+	m_Out << "set(" << resultName << " \"" << trueValueExpr << "\")\n";
+	--m_CurrentIntent;
+	emitIntent();
+	m_Out << "else()\n";
+	++m_CurrentIntent;
+	const auto falseValueExpr = evalOperand(falseValue);
+	emitIntent();
+	m_Out << "set(" << resultName << " \"" << falseValueExpr << "\")\n";
+	--m_CurrentIntent;
 	emitIntent();
 	m_Out << "endif()\n";
 }
