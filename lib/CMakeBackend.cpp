@@ -526,6 +526,7 @@ void CMakeBackend::visitInlineAsm(CallInst& I)
 
 	std::string_view templateString = as->getAsmString();
 	std::string result;
+	auto isBrace = false;
 
 	while (true)
 	{
@@ -535,10 +536,11 @@ void CMakeBackend::visitInlineAsm(CallInst& I)
 			result.append(templateString.begin(), nextDollar);
 			if (nextDollar == templateString.size())
 			{
-				assert("Invalid asm");
+				assert(!"Invalid asm");
 				std::terminate();
 			}
 			const auto nextChar = templateString[nextDollar + 1];
+			isBrace = false;
 			if (nextChar == '$')
 			{
 				result.append(1, '$');
@@ -546,6 +548,7 @@ void CMakeBackend::visitInlineAsm(CallInst& I)
 			}
 			else if (nextChar >= '0' && nextChar <= '9')
 			{
+			ParseNumber:
 				unsigned index;
 				if (const auto [ptr, ec] = std::from_chars(templateString.begin() + nextDollar + 1,
 				                                           templateString.end(), index);
@@ -567,10 +570,40 @@ void CMakeBackend::visitInlineAsm(CallInst& I)
 					}
 					else
 					{
-						assert("Invalid asm");
+						assert(!"Invalid asm");
 						std::terminate();
 					}
 					templateString = templateString.substr(ptr - templateString.begin());
+					if (isBrace)
+					{
+						if (templateString.empty())
+						{
+							assert(!"Invalid asm: brace is not closed");
+							std::terminate();
+						}
+
+						const auto nextChar = templateString.front();
+						if (nextChar == ':')
+						{
+							// 跳过 modifier
+							const auto rightBrace = templateString.find('}');
+							if (rightBrace == std::string_view::npos)
+							{
+								assert(!"Invalid asm: brace is not closed");
+								std::terminate();
+							}
+							templateString = templateString.substr(rightBrace + 1);
+						}
+						else if (nextChar == '}')
+						{
+							templateString = templateString.substr(1);
+						}
+						else
+						{
+							assert(!"Invalid asm: brace is not closed");
+							std::terminate();
+						}
+					}
 				}
 				else
 				{
@@ -578,9 +611,15 @@ void CMakeBackend::visitInlineAsm(CallInst& I)
 					std::terminate();
 				}
 			}
+			else if (nextChar == '{')
+			{
+				isBrace = true;
+				templateString = templateString.substr(1);
+				goto ParseNumber;
+			}
 			else
 			{
-				assert("Invalid asm");
+				assert(!"Invalid asm");
 				std::terminate();
 			}
 		}
