@@ -1,3 +1,26 @@
+#include <cstddef>
+
+std::size_t HeapCount{};
+
+void* operator new(std::size_t size)
+{
+	const auto id = HeapCount++;
+	void* result;
+	asm(
+		"list(APPEND _LLVM_CMAKE_MODIFIED_EXTERNAL_VARIABLE_LIST _AllocatedObject_%1)\n"
+		"set(_AllocatedObject_%1 \"0\")\n"
+		"set(%0 _AllocatedObject_%1)\n"
+		: "=r"(result)
+		: "r"(id)
+		:
+	);
+	return result;
+}
+
+void operator delete(void* ptr) noexcept
+{
+}
+
 extern "C"
 {
 	int* Ptr = nullptr;
@@ -191,5 +214,15 @@ math(EXPR %1 "%2 - %3")
 			result += 1;
 		}
 		return result;
+	}
+
+	int* TestNew()
+	{
+		return new int(123);
+	}
+
+	Pair* TestNew2()
+	{
+		return new Pair{ 123, 456 };
 	}
 }

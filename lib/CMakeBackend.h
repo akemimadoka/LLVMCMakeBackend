@@ -4,6 +4,7 @@
 #include "CMakeTargetMachine.h"
 #include "CheckNeedGotoPass.h"
 
+#include <unordered_map>
 #include <unordered_set>
 
 #include <llvm/ADT/STLExtras.h>

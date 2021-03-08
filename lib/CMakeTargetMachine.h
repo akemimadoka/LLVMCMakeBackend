@@ -27,8 +27,11 @@ namespace LLVMCMakeBackend
 	public:
 		CMakeTargetSubtargetInfo(const llvm::TargetMachine& TM, const llvm::Triple& TT,
 		                         llvm::StringRef CPU, llvm::StringRef FS)
-		    : TargetSubtargetInfo(TT, CPU, {}, FS, {}, {}, nullptr, nullptr, nullptr, nullptr, nullptr,
-		                          nullptr),
+		    : TargetSubtargetInfo(TT, CPU,
+#if LLVM_VERSION_MAJOR >= 12
+		                          {},
+#endif
+		                          FS, {}, {}, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr),
 		      Lowering(TM)
 		{
 		}

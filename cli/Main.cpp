@@ -22,11 +22,6 @@ int main(int argc, char** argv)
 
 	llvm_shutdown_obj llvm_shutdown;
 
-	InitializeAllTargets();
-	InitializeAllTargetMCs();
-	InitializeAllAsmPrinters();
-	InitializeAllAsmParsers();
-
 	LLVMInitializeCMakeBackendTarget();
 	LLVMInitializeCMakeBackendTargetInfo();
 	LLVMInitializeCMakeBackendTargetMC();

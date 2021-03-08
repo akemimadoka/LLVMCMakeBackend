@@ -50,6 +50,12 @@ message(STATUS "LoopTest3 returns ${_LLVM_CMAKE_RETURN_VALUE}")
 LoopTest4(4)
 message(STATUS "LoopTest4 returns ${_LLVM_CMAKE_RETURN_VALUE}")
 
+TestNew()
+message(STATUS "TestNew returns ${_LLVM_CMAKE_RETURN_VALUE}, dereferenced: ${${_LLVM_CMAKE_RETURN_VALUE}}")
+
+TestNew2()
+message(STATUS "TestNew2 returns ${_LLVM_CMAKE_RETURN_VALUE}, dereferenced: ${${_LLVM_CMAKE_RETURN_VALUE}}")
+
 # compile with `clang++ VirtualTest.cpp -S -emit-llvm -fno-rtti -fno-exceptions -o VirtualTest.ll`
 include(${CMAKE_CURRENT_LIST_DIR}/VirtualTest.ll.cmake)
 
