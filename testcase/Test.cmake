@@ -56,6 +56,8 @@ message(STATUS "TestNew returns ${_LLVM_CMAKE_RETURN_VALUE}, dereferenced: ${${_
 TestNew2()
 message(STATUS "TestNew2 returns ${_LLVM_CMAKE_RETURN_VALUE}, dereferenced: ${${_LLVM_CMAKE_RETURN_VALUE}}")
 
+TestCMakeString()
+
 # compile with `clang++ VirtualTest.cpp -S -emit-llvm -fno-rtti -fno-exceptions -o VirtualTest.ll`
 include(${CMAKE_CURRENT_LIST_DIR}/VirtualTest.ll.cmake)
 

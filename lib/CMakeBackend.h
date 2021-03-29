@@ -84,6 +84,8 @@ namespace LLVMCMakeBackend
 
 		void visitSelectInst(llvm::SelectInst& I);
 
+		void visitUnreachableInst(llvm::UnreachableInst& I);
+
 	private:
 		llvm::raw_ostream& m_Out;
 		llvm::Function* m_CurrentFunction;

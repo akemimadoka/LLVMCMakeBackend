@@ -8,21 +8,67 @@ void* operator new(std::size_t size)
 	void* result;
 	asm(
 		"list(APPEND _LLVM_CMAKE_MODIFIED_EXTERNAL_VARIABLE_LIST _AllocatedObject_%1)\n"
-		"set(_AllocatedObject_%1 \"0\")\n"
+		"string(REPEAT \";0\" %2 _AllocatedObject_%1)\n"
+		"set(_AllocatedObject_%1 \"0$%{_AllocatedObject_%1%}\")\n"
 		"set(%0 _AllocatedObject_%1)\n"
 		: "=r"(result)
-		: "r"(id)
+		: "r"(id), "r"(size - 1)
 		:
 	);
 	return result;
+}
+
+void* operator new[](std::size_t size)
+{
+	return ::operator new(size);
 }
 
 void operator delete(void* ptr) noexcept
 {
 }
 
+void operator delete[](void* ptr) noexcept
+{
+}
+
 extern "C"
 {
+	class CMakeString
+	{
+	public:
+		CMakeString(const char* str)
+		{
+			asm(
+				"_LLVM_CMAKE_EXTRACT_REF_LIST(%1 _CMakeString_TmpList)\n"
+				"list(POP_BACK _CMakeString_TmpList)\n"
+				"_LLVM_CMAKE_BYTEARRAY_TO_STRING(%0 $%{_CMakeString_TmpList%})\n"
+				: "=r"(m_Dummy)
+				: "r"(str)
+				:
+			);
+		}
+
+	private:
+		char m_Dummy;
+	};
+
+	void Print(CMakeString const& str)
+	{
+		asm(
+			"message(%0)\n"
+			:
+			: "r"(str)
+			:
+		);
+	}
+
+	std::size_t strlen(const char* ptr)
+	{
+		auto end = ptr;
+		while (*end++);
+		return end - ptr - 1;
+	}
+
 	int* Ptr = nullptr;
 	int Array[] = { 1, 2, 3, 4 };
 
@@ -221,8 +267,19 @@ math(EXPR %1 "%2 - %3")
 		return new int(123);
 	}
 
+	int* TestNewArray()
+	{
+		return new int[2]{ 123, 456 };
+	}
+
 	Pair* TestNew2()
 	{
 		return new Pair{ 123, 456 };
+	}
+
+	void TestCMakeString()
+	{
+		CMakeString str{ "This is a CMakeString" };
+		Print(str);
 	}
 }

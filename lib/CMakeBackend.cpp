@@ -246,6 +246,17 @@ function(_LLVM_CMAKE_ASSUME_MEMORY_LAYOUT _LLVM_CMAKE_ASSUME_MEMORY_LAYOUT_FUNC_
 	endif()
 endfunction()
 
+function(_LLVM_CMAKE_EXTRACT_REF_LIST _LLVM_CMAKE_EXTRACT_REF_LIST_PTR _LLVM_CMAKE_EXTRACT_REF_LIST_RESULT)
+	if(_LLVM_CMAKE_EXTRACT_REF_LIST_PTR MATCHES "^_LLVM_CMAKE_PTR.*\\.GEP.*:([0-9]+):(.+)$")
+		set(_LLVM_CMAKE_EXTRACT_REF_LIST_PTR_OFFSET ${CMAKE_MATCH_1})
+		set(_LLVM_CMAKE_EXTRACT_REF_LIST_PTR_REF_OBJ ${CMAKE_MATCH_2})
+		list(SUBLIST ${_LLVM_CMAKE_EXTRACT_REF_LIST_PTR_REF_OBJ} ${_LLVM_CMAKE_EXTRACT_REF_LIST_PTR_OFFSET} -1 ${_LLVM_CMAKE_EXTRACT_REF_LIST_RESULT})
+		set(${_LLVM_CMAKE_EXTRACT_REF_LIST_RESULT} ${${_LLVM_CMAKE_EXTRACT_REF_LIST_RESULT}} PARENT_SCOPE)
+	else()
+		set(${_LLVM_CMAKE_EXTRACT_REF_LIST_RESULT} ${${_LLVM_CMAKE_EXTRACT_REF_LIST_PTR}} PARENT_SCOPE)
+	endif()
+endfunction()
+
 # End of LLVM CMake intrinsics
 
 )CMakeIntrinsics";
@@ -386,16 +397,7 @@ void CMakeBackend::visitCastInst(CastInst& I)
 				emitIntent();
 				m_Out << "set(" << resultName << " " << operand << ")\n";
 
-				// 当指针转换到具有更多字段的类型时，修改布局
-				// 原模块并非为CMake后端生成，因此可能有对于此后端过于激进的假设，在此我们只能假设这类假设全为安全可行的
-				if (const auto dstFieldCount = getTypeFieldCount(dstElemType);
-				    getTypeFieldCount(srcElemType) < dstFieldCount)
-				{
-					emitIntent();
-					m_Out << "_LLVM_CMAKE_ASSUME_MEMORY_LAYOUT("
-					      << getFunctionModifiedExternalVariableListName(m_CurrentFunction) << " ${"
-					      << resultName << "} " << dstFieldCount << ")\n";
-				}
+				// 暂时不处理不安全转换的情形
 			}
 		}
 	}
@@ -1062,6 +1064,12 @@ void CMakeBackend::visitSelectInst(llvm::SelectInst& I)
 	--m_CurrentIntent;
 	emitIntent();
 	m_Out << "endif()\n";
+}
+
+void CMakeBackend::visitUnreachableInst(llvm::UnreachableInst& I)
+{
+	emitIntent();
+	m_Out << "message(FATAL_ERROR \"Unreachable\")\n";
 }
 
 void CMakeBackend::emitModuleInfo(llvm::Module& m)
