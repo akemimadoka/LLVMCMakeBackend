@@ -36,6 +36,16 @@ extern "C"
 	class CMakeString
 	{
 	public:
+		CMakeString()
+		{
+			asm(
+				"set(%0 \"%1\")"
+				: "=r"(m_Dummy)
+				: "r"("")
+				:
+			);
+		}
+
 		CMakeString(const char* str)
 		{
 			asm(
@@ -48,6 +58,18 @@ extern "C"
 			);
 		}
 
+		CMakeString operator+(CMakeString const& other) const
+		{
+			CMakeString result;
+			asm(
+				"set(%0 \"%1%2\")"
+				: "=r"(result.m_Dummy)
+				: "r"(m_Dummy), "r"(other.m_Dummy)
+				:
+			);
+			return result;
+		}
+
 	private:
 		char m_Dummy;
 	};
@@ -55,7 +77,7 @@ extern "C"
 	void Print(CMakeString const& str)
 	{
 		asm(
-			"message(%0)\n"
+			"message(\"%0\")\n"
 			:
 			: "r"(str)
 			:
@@ -279,7 +301,9 @@ math(EXPR %1 "%2 - %3")
 
 	void TestCMakeString()
 	{
-		CMakeString str{ "This is a CMakeString" };
-		Print(str);
+		CMakeString str = "This is a ";
+		CMakeString str2 = "CMakeString";
+		Print(str + str2);
+		Print("");
 	}
 }
